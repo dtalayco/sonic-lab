@@ -22,6 +22,15 @@ interface in the remote switch's namespace).
 #include <bpf/bpf_tracing.h>
 
 /*
+ * Old-style (non-BTF) map definitions using the bpf_map_def struct
+ * already provided by bpf_helpers.h. The section name "maps" (without
+ * a leading dot) causes the cilium/ebpf library to parse the binary
+ * bpf_map_def entries directly, without requiring BTF. Using ".maps"
+ * (with a dot) would trigger BTF-based parsing which requires
+ * CONFIG_DEBUG_INFO_BTF in the kernel.
+ */
+
+/*
  * link_map: ingress ifindex (webmesh ns) → peer ifindex (webmesh ns)
  *
  * bpf_redirect_peer(peer_ifidx) delivers the skb to the veth-peer of
@@ -29,12 +38,12 @@ interface in the remote switch's namespace).
  * have their peers in switch namespaces, redirecting to the remote
  * webmesh endpoint's ifindex causes delivery to the remote switch.
  */
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __type(key,   __u32);  /* ingress ifindex */
-    __type(value, __u32);  /* peer ifindex    */
-    __uint(max_entries, 1024);
-} link_map SEC(".maps");
+struct bpf_map_def SEC("maps") link_map = {
+    .type        = BPF_MAP_TYPE_HASH,
+    .key_size    = sizeof(__u32),  /* ingress ifindex */
+    .value_size  = sizeof(__u32),  /* peer ifindex    */
+    .max_entries = 1024,
+};
 
 /* Per-link statistics for observability */
 struct link_stats {
@@ -42,12 +51,12 @@ struct link_stats {
     __u64 bytes;
 };
 
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __type(key,   __u32);
-    __type(value, struct link_stats);
-    __uint(max_entries, 1024);
-} stats_map SEC(".maps");
+struct bpf_map_def SEC("maps") stats_map = {
+    .type        = BPF_MAP_TYPE_HASH,
+    .key_size    = sizeof(__u32),
+    .value_size  = sizeof(struct link_stats),
+    .max_entries = 1024,
+};
 
 SEC("tc/ingress")
 int patch_panel(struct __sk_buff *skb)

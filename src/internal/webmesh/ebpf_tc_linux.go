@@ -10,36 +10,37 @@ package webmesh
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/vishvananda/netlink"
 )
 
-// tcIngressParent is the TC classid for the ingress hook:
-// TC_H_MAJ(TC_H_CLSACT) | TC_H_MIN_INGRESS = (0xFFF2 << 16) | 2
-const tcIngressParent = uint32(0xFFF20002)
+// tcIngressParent is the TC handle for the ingress hook.
+// netlink.HANDLE_INGRESS = 0xFFFFFFF1
+const tcIngressParent = netlink.HANDLE_INGRESS
 
 // AttachTC attaches the patch_panel program as a TC ingress filter on
 // the interface with the given link index.
 func (p *PatchPanel) AttachTC(linkIdx int) error {
-	// Ensure the ingress qdisc exists (idempotent)
-	qdisc := &netlink.Ingress{
-		QdiscAttrs: netlink.QdiscAttrs{
-			LinkIndex: linkIdx,
-			Parent:    netlink.HANDLE_ROOT,
-		},
-	}
-	if err := netlink.QdiscAdd(qdisc); err != nil {
-		if !isExistsErr(err) {
-			return fmt.Errorf("add ingress qdisc on ifidx %d: %w", linkIdx, err)
-		}
-	}
-
-	// Check if a filter with the same name already exists (idempotent)
+	// Resolve the interface name for tc CLI use
 	link, err := netlink.LinkByIndex(linkIdx)
 	if err != nil {
 		return fmt.Errorf("lookup link ifidx %d: %w", linkIdx, err)
 	}
+	ifname := link.Attrs().Name
+
+	// Ensure the ingress qdisc exists (idempotent). We use the tc CLI
+	// because the netlink library's QdiscAdd is rejected by some kernel
+	// versions with "Ingress filters must set Parent to HANDLE_INGRESS".
+	cmd := exec.Command("tc", "qdisc", "add", "dev", ifname, "ingress")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		if !strings.Contains(string(out), "exists") {
+			return fmt.Errorf("tc qdisc add dev %s ingress: %s: %w", ifname, string(out), err)
+		}
+	}
+
+	// Check if a filter with the same name already exists (idempotent)
 	existing, _ := netlink.FilterList(link, tcIngressParent)
 	for _, f := range existing {
 		if bf, ok := f.(*netlink.BpfFilter); ok && bf.Name == "patch_panel" {
@@ -59,13 +60,17 @@ func (p *PatchPanel) AttachTC(linkIdx int) error {
 		DirectAction: true,
 	}
 	if err := netlink.FilterAdd(filter); err != nil {
-		return fmt.Errorf("add BPF filter on ifidx %d: %w", linkIdx, err)
+		return fmt.Errorf("add BPF filter on %s: %w", ifname, err)
 	}
 	return nil
 }
 
 // DetachTC removes the patch_panel BPF filter from the interface.
 func (p *PatchPanel) DetachTC(linkIdx int) error {
+	link, err := netlink.LinkByIndex(linkIdx)
+	if err != nil {
+		return fmt.Errorf("lookup link ifidx %d: %w", linkIdx, err)
+	}
 	filter := &netlink.BpfFilter{
 		FilterAttrs: netlink.FilterAttrs{
 			LinkIndex: linkIdx,
@@ -77,12 +82,10 @@ func (p *PatchPanel) DetachTC(linkIdx int) error {
 		Name:         "patch_panel",
 		DirectAction: true,
 	}
-	return netlink.FilterDel(filter)
+	if err := netlink.FilterDel(filter); err != nil {
+		return fmt.Errorf("remove BPF filter on %s: %w", link.Attrs().Name, err)
+	}
+	return nil
 }
 
-func isExistsErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(err.Error(), "exists")
-}
+
