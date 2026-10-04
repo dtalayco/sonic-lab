@@ -26,6 +26,7 @@ func NewAPI(rec *Reconciler, version string) *API {
 // Handler returns the HTTP handler for the API.
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/", a.handleUI)
 	mux.HandleFunc("/v1/status", a.handleStatus)
 	mux.HandleFunc("/v1/links", a.handleLinks)
 	mux.HandleFunc("/v1/links/", a.handleLinkKey)
@@ -101,6 +102,18 @@ func (a *API) handleLinkKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check for /v1/links/{key}/up or /v1/links/{key}/down
+	if strings.HasSuffix(rest, "/up") {
+		key := strings.TrimSuffix(rest, "/up")
+		a.handleLinkFlap(w, r, key, true)
+		return
+	}
+	if strings.HasSuffix(rest, "/down") {
+		key := strings.TrimSuffix(rest, "/down")
+		a.handleLinkFlap(w, r, key, false)
+		return
+	}
+
 	key := rest
 	switch r.Method {
 	case http.MethodDelete:
@@ -112,6 +125,34 @@ func (a *API) handleLinkKey(w http.ResponseWriter, r *http.Request) {
 	default:
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// --- /v1/links/{key}/up and /v1/links/{key}/down ---
+
+type LinkFlapResponse struct {
+	LinkID string `json:"link_id"`
+	State  string `json:"state"`
+}
+
+func (a *API) handleLinkFlap(w http.ResponseWriter, r *http.Request, key string, up bool) {
+	if r.Method != http.MethodPost {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var err error
+	var state string
+	if up {
+		state = "up"
+		err = a.rec.SetLinkUp(key)
+	} else {
+		state = "down"
+		err = a.rec.SetLinkDown(key)
+	}
+	if err != nil {
+		httpError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, LinkFlapResponse{LinkID: key, State: state})
 }
 
 // --- /v1/links/{key}/stats ---

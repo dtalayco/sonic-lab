@@ -24,8 +24,10 @@ type Reconciler struct {
 	mu           sync.Mutex
 	desired      map[string]Link
 	applied      map[string]Link
+	linkStates   map[string]bool // key → true=up, false=down
 	stateFile    string
 	topologyFile string
+	topoMtime    time.Time
 	interval     time.Duration
 	panel        *PatchPanel // may be nil if eBPF is unavailable
 }
@@ -37,12 +39,14 @@ func NewReconciler(stateFile, topologyFile string, interval time.Duration, panel
 	r := &Reconciler{
 		desired:      make(map[string]Link),
 		applied:      make(map[string]Link),
+		linkStates:   make(map[string]bool),
 		stateFile:    stateFile,
 		topologyFile: topologyFile,
 		interval:     interval,
 		panel:        panel,
 	}
 	r.loadState()
+	r.checkTopoFile()
 	return r
 }
 
@@ -200,8 +204,52 @@ func (r *Reconciler) unapplyLink(devA, portA, devB, portB string) {
 	}
 }
 
-// Run blocks forever, reconciling on a ticker and reloading the topology
-// file on SIGHUP. Call in a goroutine.
+// checkTopoFile records the current mtime of the topology file so that
+// subsequent calls can detect changes. Call once at startup.
+func (r *Reconciler) checkTopoFile() {
+	if r.topologyFile == "" {
+		return
+	}
+	if info, err := os.Stat(r.topologyFile); err == nil {
+		r.mu.Lock()
+		r.topoMtime = info.ModTime()
+		r.mu.Unlock()
+	}
+}
+
+// reloadTopoFile checks whether the topology file has been modified since
+// the last load. If so, it reloads the file and sets the desired topology.
+// Returns true if the file was reloaded.
+func (r *Reconciler) reloadTopoFile() bool {
+	if r.topologyFile == "" {
+		return false
+	}
+	info, err := os.Stat(r.topologyFile)
+	if err != nil {
+		return false
+	}
+	r.mu.Lock()
+	changed := info.ModTime().After(r.topoMtime)
+	if changed {
+		r.topoMtime = info.ModTime()
+	}
+	r.mu.Unlock()
+
+	if !changed {
+		return false
+	}
+	top, err := LoadTopologyFile(r.topologyFile)
+	if err != nil {
+		log.Printf("reload topology error: %v", err)
+		return false
+	}
+	log.Printf("topology file changed: loaded %d links from %s", len(top.Links), r.topologyFile)
+	r.SetDesired(top)
+	return true
+}
+
+// Run blocks forever, reconciling on a ticker, watching the topology file
+// for changes, and reloading on SIGHUP. Call in a goroutine.
 func (r *Reconciler) Run() {
 	if r.topologyFile != "" {
 		top, err := LoadTopologyFile(r.topologyFile)
@@ -212,6 +260,7 @@ func (r *Reconciler) Run() {
 			r.SetDesired(top)
 		}
 	}
+	r.checkTopoFile()
 
 	// Initial reconcile
 	r.Reconcile()
@@ -225,6 +274,9 @@ func (r *Reconciler) Run() {
 	for {
 		select {
 		case <-ticker.C:
+			// Watch for topology file changes
+			r.reloadTopoFile()
+			// Reconcile any drift
 			r.Reconcile()
 		case <-sigCh:
 			log.Println("SIGHUP: reloading topology file")
@@ -234,6 +286,7 @@ func (r *Reconciler) Run() {
 				} else {
 					r.SetDesired(top)
 				}
+				r.checkTopoFile()
 			}
 		}
 	}
@@ -328,7 +381,8 @@ func (r *Reconciler) loadState() {
 		return
 	}
 	var s struct {
-		Applied []Link `json:"applied"`
+		Applied    []Link          `json:"applied"`
+		LinkStates map[string]bool `json:"link_states,omitempty"`
 	}
 	if err := json.Unmarshal(data, &s); err != nil {
 		log.Printf("warning: could not parse state file %s: %v", r.stateFile, err)
@@ -337,19 +391,35 @@ func (r *Reconciler) loadState() {
 	for _, l := range s.Applied {
 		r.applied[l.Key()] = l
 	}
+	if s.LinkStates != nil {
+		for k, v := range s.LinkStates {
+			r.linkStates[k] = v
+		}
+	}
 	if len(r.applied) > 0 {
 		log.Printf("restored %d applied links from %s", len(r.applied), r.stateFile)
 	}
 }
 
+// saveState persists the current applied set and link states to disk.
+// Caller must hold r.mu.
 func (r *Reconciler) saveState() {
 	links := make([]Link, 0, len(r.applied))
 	for _, l := range r.applied {
 		links = append(links, l)
 	}
+	// Only persist non-trivial states (down links)
+	states := make(map[string]bool)
+	for k, v := range r.linkStates {
+		if !v {
+			states[k] = v
+		}
+	}
 	s := struct {
-		Applied []Link `json:"applied"`
-	}{Applied: links}
+		Applied    []Link          `json:"applied"`
+		LinkStates map[string]bool `json:"link_states,omitempty"`
+	}{Applied: links, LinkStates: states}
+
 	data, _ := json.MarshalIndent(s, "", "  ")
 	_ = os.WriteFile(r.stateFile, data, 0o644)
 }

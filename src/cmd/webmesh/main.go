@@ -31,7 +31,7 @@ func main() {
 	stateFile := flag.String("state", "/var/run/webmesh/state.json", "state file path")
 	interval := flag.Duration("interval", 5*time.Second, "reconcile interval")
 	bpfObj := flag.String("bpf", "/etc/webmesh/patch_panel.o", "eBPF object file (empty to disable eBPF)")
-	version := flag.String("version", "0.2.0", "version string")
+	version := flag.String("version", "0.3.0", "version string")
 	flag.Parse()
 
 	// Ensure state directory exists
