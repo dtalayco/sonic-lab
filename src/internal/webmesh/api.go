@@ -8,8 +8,8 @@ package webmesh
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
+	"strings"
 )
 
 // API is the HTTP server exposing the webmesh control plane.
@@ -87,12 +87,21 @@ func (a *API) handleLinks(w http.ResponseWriter, r *http.Request) {
 // --- /v1/links/{key} ---
 
 func (a *API) handleLinkKey(w http.ResponseWriter, r *http.Request) {
-	// Extract key from URL path: /v1/links/{key}
-	key := r.URL.Path[len("/v1/links/"):]
-	if key == "" {
+	// Extract key from URL path: /v1/links/{key} or /v1/links/{key}/stats
+	rest := r.URL.Path[len("/v1/links/"):]
+	if rest == "" {
 		httpError(w, http.StatusBadRequest, "missing link key")
 		return
 	}
+
+	// Check for /v1/links/{key}/stats
+	if strings.HasSuffix(rest, "/stats") {
+		key := strings.TrimSuffix(rest, "/stats")
+		a.handleLinkStats(w, r, key)
+		return
+	}
+
+	key := rest
 	switch r.Method {
 	case http.MethodDelete:
 		if err := a.rec.RemoveLink(key); err != nil {
@@ -103,6 +112,21 @@ func (a *API) handleLinkKey(w http.ResponseWriter, r *http.Request) {
 	default:
 		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// --- /v1/links/{key}/stats ---
+
+func (a *API) handleLinkStats(w http.ResponseWriter, r *http.Request, key string) {
+	if r.Method != http.MethodGet {
+		httpError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	stats, err := a.rec.GetLinkStats(key)
+	if err != nil {
+		httpError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
 }
 
 // --- /v1/topology ---
@@ -158,5 +182,3 @@ func httpError(w http.ResponseWriter, status int, msg string) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
-
-var _ = fmt.Sprintf // keep fmt imported for future use

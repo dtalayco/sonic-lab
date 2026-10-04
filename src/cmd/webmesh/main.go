@@ -6,6 +6,10 @@ license that can be found in the LICENSE file.
 
 // webmesh is a daemon that runs inside a privileged container and manages
 // inter-switch veth wiring for SONiC virtual switch labs.
+//
+// In Phase 2, it loads an eBPF patch panel program that forwards packets
+// between paired veth endpoints via bpf_redirect_peer(), enabling dynamic
+// rewiring at runtime.
 package main
 
 import (
@@ -26,7 +30,8 @@ func main() {
 	topologyFile := flag.String("topology", "/etc/webmesh/topology.yml", "topology file (empty to skip)")
 	stateFile := flag.String("state", "/var/run/webmesh/state.json", "state file path")
 	interval := flag.Duration("interval", 5*time.Second, "reconcile interval")
-	version := flag.String("version", "0.1.0", "version string")
+	bpfObj := flag.String("bpf", "/etc/webmesh/patch_panel.o", "eBPF object file (empty to disable eBPF)")
+	version := flag.String("version", "0.2.0", "version string")
 	flag.Parse()
 
 	// Ensure state directory exists
@@ -36,12 +41,25 @@ func main() {
 		}
 	}
 
+	// Load eBPF patch panel (optional)
+	var panel *webmesh.PatchPanel
+	if *bpfObj != "" {
+		p, err := webmesh.LoadPatchPanel(*bpfObj)
+		if err != nil {
+			log.Printf("warning: eBPF not available (%v); running in Phase 1 mode", err)
+		} else {
+			panel = p
+			defer panel.Close()
+			log.Println("eBPF patch panel loaded")
+		}
+	}
+
 	topFile := *topologyFile
 	if topFile == "" {
 		topFile = ""
 	}
 
-	rec := webmesh.NewReconciler(*stateFile, topFile, *interval)
+	rec := webmesh.NewReconciler(*stateFile, topFile, *interval, panel)
 	go rec.Run()
 
 	api := webmesh.NewAPI(rec, *version)

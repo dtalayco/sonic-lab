@@ -1,12 +1,23 @@
-# Stage 1: Build the Go binary
-FROM golang:1.22-bullseye AS builder
+# Stage 1: Build the eBPF patch panel object
+FROM debian:bullseye AS bpf-builder
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        clang \
+        libbpf-dev && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY src/bpf/patch_panel.c .
+RUN clang -O2 -target bpf -c patch_panel.c -o patch_panel.o
+
+# Stage 2: Build the Go binary
+FROM golang:1.22-bullseye AS go-builder
 WORKDIR /app
 COPY src/go.mod src/go.sum ./
 RUN go mod download
 COPY src/ .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /webmesh ./cmd/webmesh
 
-# Stage 2: Minimal runtime image
+# Stage 3: Minimal runtime image
 FROM debian:bullseye
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -16,5 +27,6 @@ RUN apt-get update && \
         curl \
         ca-certificates && \
     rm -rf /var/lib/apt/lists/*
-COPY --from=builder /webmesh /usr/local/bin/webmesh
+COPY --from=go-builder /webmesh /usr/local/bin/webmesh
+COPY --from=bpf-builder /app/patch_panel.o /etc/webmesh/patch_panel.o
 ENTRYPOINT ["/usr/local/bin/webmesh"]

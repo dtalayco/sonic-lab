@@ -8,32 +8,52 @@ package webmesh
 
 import "testing"
 
-func TestVethName(t *testing.T) {
+func TestWmIfname(t *testing.T) {
 	tests := []struct {
 		dev, port, want string
 	}{
-		{"spine1-linux", "Ethernet0", "vspi0"},
-		{"spine1-linux", "Ethernet4", "vspi4"},
-		{"leaf1-linux", "Ethernet0", "vlea0"},
-		{"leaf2-linux", "Ethernet8", "vlea8"},
-		{"spine1", "Ethernet0", "vspi0"},
-		{"leaf1", "Ethernet4", "vlea4"},
-		{"spine2-linux", "Ethernet12", "vspi12"},
-		{"a-linux", "Ethernet0", "va0"},
+		{"spine1-linux", "Ethernet0", "wm-spine1-0"},
+		{"spine1-linux", "Ethernet4", "wm-spine1-4"},
+		{"leaf1-linux", "Ethernet0", "wm-leaf1-0"},
+		{"leaf2-linux", "Ethernet8", "wm-leaf2-8"},
+		{"spine1", "Ethernet0", "wm-spine1-0"},
+		{"leaf1", "Ethernet4", "wm-leaf1-4"},
+		{"spine2-linux", "Ethernet12", "wm-spine2-12"},
+		{"a-linux", "Ethernet0", "wm-a-0"},
 	}
 	for _, tt := range tests {
-		if got := vethName(tt.dev, tt.port); got != tt.want {
-			t.Errorf("vethName(%q, %q) = %q, want %q", tt.dev, tt.port, got, tt.want)
+		if got := wmIfname(tt.dev, tt.port); got != tt.want {
+			t.Errorf("wmIfname(%q, %q) = %q, want %q", tt.dev, tt.port, got, tt.want)
 		}
 	}
 }
 
-func TestVethNameUniqueness(t *testing.T) {
-	// leaf1 and leaf2 both start with "lea" — verify they produce
-	// different names when port numbers differ.
-	a := vethName("leaf1-linux", "Ethernet0")
-	b := vethName("leaf2-linux", "Ethernet4")
+func TestSwIfname(t *testing.T) {
+	tests := []struct {
+		dev, port, want string
+	}{
+		{"spine1-linux", "Ethernet0", "sw-spine1-0"},
+		{"leaf1-linux", "Ethernet4", "sw-leaf1-4"},
+		{"spine1", "Ethernet0", "sw-spine1-0"},
+	}
+	for _, tt := range tests {
+		if got := swIfname(tt.dev, tt.port); got != tt.want {
+			t.Errorf("swIfname(%q, %q) = %q, want %q", tt.dev, tt.port, got, tt.want)
+		}
+	}
+}
+
+func TestWmIfnameUniqueness(t *testing.T) {
+	// spine1 and spine2 must produce different webmesh-side names
+	a := wmIfname("spine1-linux", "Ethernet0")
+	b := wmIfname("spine2-linux", "Ethernet0")
 	if a == b {
-		t.Errorf("vethName collision: both gave %q", a)
+		t.Errorf("wmIfname collision: both gave %q", a)
+	}
+	// leaf1 and leaf2 with same port
+	c := wmIfname("leaf1-linux", "Ethernet0")
+	d := wmIfname("leaf2-linux", "Ethernet0")
+	if c == d {
+		t.Errorf("wmIfname collision: both gave %q", c)
 	}
 }

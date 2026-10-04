@@ -14,18 +14,21 @@ import (
 	"strings"
 )
 
-// vethName generates the veth name used in the staging namespace before the
-// endpoint is moved into a container namespace.
-// Convention: "v" + first 3 chars of base device name + port number.
-// e.g. spine1-linux + Ethernet0 → "vsp0"
-func vethName(dev, port string) string {
+// wmIfname generates the webmesh-side veth endpoint name.
+// Convention: "wm-" + base device name + "-" + port number.
+// e.g. spine1-linux + Ethernet0 → "wm-spine1-0"
+func wmIfname(dev, port string) string {
 	base := strings.TrimSuffix(dev, "-linux")
-	prefix := base
-	if len(prefix) > 3 {
-		prefix = prefix[:3]
-	}
 	portNum := strings.TrimPrefix(port, "Ethernet")
-	return "v" + prefix + portNum
+	return "wm-" + base + "-" + portNum
+}
+
+// swIfname generates the temporary name for the switch-side veth endpoint
+// before it is moved into the target namespace and renamed.
+func swIfname(dev, port string) string {
+	base := strings.TrimSuffix(dev, "-linux")
+	portNum := strings.TrimPrefix(port, "Ethernet")
+	return "sw-" + base + "-" + portNum
 }
 
 // containerPID returns the host PID of the init process of the named container.
@@ -49,11 +52,46 @@ func linkInNS(pid int, ifname string) bool {
 	return exec.Command("nsenter", "-t", strconv.Itoa(pid), "-n", "ip", "link", "show", ifname).Run() == nil
 }
 
-// createLink wires a veth pair between two containers.
-// It creates the pair in the current (staging) namespace, moves each end into
-// the target container's namespace, renames it to the SONiC port name, and
-// brings it up. The operation is idempotent: if either endpoint already exists
-// in its target namespace, the function returns nil.
+// ifindexByName returns the ifindex of a link in the current namespace.
+func ifindexByName(name string) (int, error) {
+	out, err := exec.Command("ip", "-j", "link", "show", name).Output()
+	if err != nil {
+		return 0, fmt.Errorf("ip link show %s: %w", name, err)
+	}
+	// The JSON output is a single object: {"ifindex":3,"ifname":"wm-spine1-0",...}
+	// Parse minimally: find "ifindex":N
+	s := string(out)
+	key := `"ifindex":`
+	idx := strings.Index(s, key)
+	if idx < 0 {
+		return 0, fmt.Errorf("ifindex not found in output for %s", name)
+	}
+	s = s[idx+len(key):]
+	end := 0
+	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+		end++
+	}
+	n, err := strconv.Atoi(s[:end])
+	if err != nil {
+		return 0, fmt.Errorf("parsing ifindex for %s: %w", name, err)
+	}
+	return n, nil
+}
+
+// createLink wires two veth pairs for a link through the webmesh namespace.
+//
+//
+//   switch A netns       webmesh netns        switch B netns
+//   ┌──────────┐  veth  ┌────────────┐  eBPF ┌────────────┐  veth ┌──────────┐
+//   │ EthernetX│◄──────►│ wm-a-x     │◄─────►│ wm-b-y     │◄──────►│ EthernetY│
+//   └──────────┘        └────────────┘       └────────────┘        └──────────┘
+//
+// The webmesh-side endpoints (wm-a-x, wm-b-y) remain in the webmesh
+// namespace. The switch-side endpoints are moved into the respective
+// switch namespaces and renamed to the SONiC port names.
+//
+// The operation is idempotent: if either switch-side endpoint already
+// exists in its target namespace, the function returns nil.
 func createLink(devA, portA, devB, portB string) error {
 	pidA, err := containerPID(devA)
 	if err != nil {
@@ -64,71 +102,81 @@ func createLink(devA, portA, devB, portB string) error {
 		return fmt.Errorf("resolve %s: %w", devB, err)
 	}
 
-	// Idempotency check
+	// Idempotency: if either switch-side endpoint already exists, skip
 	if linkInNS(pidA, portA) || linkInNS(pidB, portB) {
 		log.Printf("link %s:%s <-> %s:%s already exists, skipping", devA, portA, devB, portB)
 		return nil
 	}
 
-	ha := vethName(devA, portA)
-	hb := vethName(devB, portB)
+	wmA := wmIfname(devA, portA)
+	swA := swIfname(devA, portA)
+	wmB := wmIfname(devB, portB)
+	swB := swIfname(devB, portB)
 
-	// Create veth pair in staging namespace
-	if err := run("ip", "link", "add", ha, "type", "veth", "peer", "name", hb); err != nil {
-		return fmt.Errorf("create veth %s<->%s: %w", ha, hb, err)
+	// --- Veth pair A: webmesh ↔ switch A ---
+	if err := run("ip", "link", "add", wmA, "type", "veth", "peer", "name", swA); err != nil {
+		return fmt.Errorf("create veth %s<->%s: %w", wmA, swA, err)
 	}
 
-	// Move endpoint A into container A
-	if err := run("ip", "link", "set", ha, "netns", strconv.Itoa(pidA)); err != nil {
-		cleanupVeth(ha, hb)
-		return fmt.Errorf("move %s → %s: %w", ha, devA, err)
+	if err := run("ip", "link", "set", swA, "netns", strconv.Itoa(pidA)); err != nil {
+		cleanupWmPair(wmA)
+		return fmt.Errorf("move %s → %s: %w", swA, devA, err)
 	}
 
-	// Move endpoint B into container B
-	if err := run("ip", "link", "set", hb, "netns", strconv.Itoa(pidB)); err != nil {
-		cleanupVeth(ha, hb)
-		return fmt.Errorf("move %s → %s: %w", hb, devB, err)
+	if err := run("nsenter", "-t", strconv.Itoa(pidA), "-n", "ip", "link", "set", swA, "name", portA); err != nil {
+		cleanupWmPair(wmA)
+		return fmt.Errorf("rename %s→%s in %s: %w", swA, portA, devA, err)
 	}
 
-	// Rename in target namespaces
-	if err := run("nsenter", "-t", strconv.Itoa(pidA), "-n", "ip", "link", "set", ha, "name", portA); err != nil {
-		cleanupVeth(ha, hb)
-		return fmt.Errorf("rename %s→%s in %s: %w", ha, portA, devA, err)
-	}
-	if err := run("nsenter", "-t", strconv.Itoa(pidB), "-n", "ip", "link", "set", hb, "name", portB); err != nil {
-		cleanupVeth(ha, hb)
-		return fmt.Errorf("rename %s→%s in %s: %w", hb, portB, devB, err)
+	// --- Veth pair B: webmesh ↔ switch B ---
+	if err := run("ip", "link", "add", wmB, "type", "veth", "peer", "name", swB); err != nil {
+		cleanupWmPair(wmA)
+		return fmt.Errorf("create veth %s<->%s: %w", wmB, swB, err)
 	}
 
-	// Bring up (best-effort; failures here are non-fatal)
+	if err := run("ip", "link", "set", swB, "netns", strconv.Itoa(pidB)); err != nil {
+		cleanupWmPair(wmA)
+		cleanupWmPair(wmB)
+		return fmt.Errorf("move %s → %s: %w", swB, devB, err)
+	}
+
+	if err := run("nsenter", "-t", strconv.Itoa(pidB), "-n", "ip", "link", "set", swB, "name", portB); err != nil {
+		cleanupWmPair(wmA)
+		cleanupWmPair(wmB)
+		return fmt.Errorf("rename %s→%s in %s: %w", swB, portB, devB, err)
+	}
+
+	// Bring up all four endpoints (best-effort)
+	runQuiet("ip", "link", "set", wmA, "up")
+	runQuiet("ip", "link", "set", wmB, "up")
 	runQuiet("nsenter", "-t", strconv.Itoa(pidA), "-n", "ip", "link", "set", portA, "up")
 	runQuiet("nsenter", "-t", strconv.Itoa(pidB), "-n", "ip", "link", "set", portB, "up")
 
-	log.Printf("created link %s:%s <-> %s:%s", devA, portA, devB, portB)
+	log.Printf("created link %s:%s <-> %s:%s (wm: %s, %s)", devA, portA, devB, portB, wmA, wmB)
 	return nil
 }
 
-// deleteLink removes a veth pair between two containers.
-// It is safe to call even if the links or containers no longer exist.
+// deleteLink removes both veth pairs for a link.
+// Deleting the webmesh-side endpoint also deletes the switch-side peer,
+// which causes the SONiC interface to go down.
 func deleteLink(devA, portA, devB, portB string) error {
-	if pid, err := containerPID(devA); err == nil && linkInNS(pid, portA) {
-		runQuiet("nsenter", "-t", strconv.Itoa(pid), "-n", "ip", "link", "set", portA, "down")
-		runQuiet("nsenter", "-t", strconv.Itoa(pid), "-n", "ip", "link", "del", portA)
-	}
-	if pid, err := containerPID(devB); err == nil && linkInNS(pid, portB) {
-		runQuiet("nsenter", "-t", strconv.Itoa(pid), "-n", "ip", "link", "set", portB, "down")
-		runQuiet("nsenter", "-t", strconv.Itoa(pid), "-n", "ip", "link", "del", portB)
-	}
-	log.Printf("deleted link %s:%s <-> %s:%s", devA, portA, devB, portB)
+	wmA := wmIfname(devA, portA)
+	wmB := wmIfname(devB, portB)
+
+	// Delete webmesh-side endpoints (peers in switch ns are removed too)
+	runQuiet("ip", "link", "set", wmA, "down")
+	runQuiet("ip", "link", "del", wmA)
+	runQuiet("ip", "link", "set", wmB, "down")
+	runQuiet("ip", "link", "del", wmB)
+
+	log.Printf("deleted link %s:%s <-> %s:%s (wm: %s, %s)", devA, portA, devB, portB, wmA, wmB)
 	return nil
 }
 
-// cleanupVeth removes veth endpoints that may be left in the staging namespace
-// after a failed createLink. Deleting either end of a veth pair removes both.
-func cleanupVeth(names ...string) {
-	for _, n := range names {
-		runQuiet("ip", "link", "del", n)
-	}
+// cleanupWmPair removes a webmesh-side veth endpoint (and its peer) if it
+// exists in the current namespace.
+func cleanupWmPair(wmName string) {
+	runQuiet("ip", "link", "del", wmName)
 }
 
 func run(name string, args ...string) error {

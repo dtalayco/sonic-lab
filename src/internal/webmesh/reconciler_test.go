@@ -17,7 +17,7 @@ func newTestReconciler(t *testing.T) *Reconciler {
 	t.Helper()
 	dir := t.TempDir()
 	stateFile := filepath.Join(dir, "state.json")
-	return NewReconciler(stateFile, "", time.Hour) // long interval: no background ticks
+	return NewReconciler(stateFile, "", time.Hour, nil) // long interval: no background ticks
 }
 
 func TestReconcilerSetDesiredInvalidLinks(t *testing.T) {
@@ -90,7 +90,7 @@ func TestReconcilerRemoveNonExistent(t *testing.T) {
 func TestReconcilerStatePersistence(t *testing.T) {
 	dir := t.TempDir()
 	stateFile := filepath.Join(dir, "state.json")
-	r := NewReconciler(stateFile, "", time.Hour)
+	r := NewReconciler(stateFile, "", time.Hour, nil)
 
 	link := Link{
 		Endpoints: []Endpoint{
@@ -112,7 +112,7 @@ func TestReconcilerStatePersistence(t *testing.T) {
 	}
 
 	// Load into a new reconciler
-	r2 := NewReconciler(stateFile, "", time.Hour)
+	r2 := NewReconciler(stateFile, "", time.Hour, nil)
 	if r2.AppliedCount() != 1 {
 		t.Errorf("r2.AppliedCount = %d, want 1", r2.AppliedCount())
 	}
@@ -125,7 +125,7 @@ func TestReconcilerStatePersistence(t *testing.T) {
 func TestReconcilerStatePersistenceEmpty(t *testing.T) {
 	dir := t.TempDir()
 	stateFile := filepath.Join(dir, "state.json")
-	r := NewReconciler(stateFile, "", time.Hour)
+	r := NewReconciler(stateFile, "", time.Hour, nil)
 	if r.AppliedCount() != 0 {
 		t.Errorf("AppliedCount with no state file = %d, want 0", r.AppliedCount())
 	}
@@ -139,5 +139,33 @@ func TestReconcilerAppliedLinksEmpty(t *testing.T) {
 	}
 	if len(links) != 0 {
 		t.Errorf("len(AppliedLinks()) = %d, want 0", len(links))
+	}
+}
+
+func TestReconcilerGetLinkStatsNoEBPF(t *testing.T) {
+	r := newTestReconciler(t)
+	// Inject a link into applied set
+	link := Link{
+		Endpoints: []Endpoint{
+			{Device: "spine1-linux", Port: "Ethernet0"},
+			{Device: "leaf1-linux", Port: "Ethernet0"},
+		},
+	}
+	r.mu.Lock()
+	r.applied[link.Key()] = link
+	r.mu.Unlock()
+
+	// panel is nil, so GetLinkStats should return an error
+	_, err := r.GetLinkStats(link.Key())
+	if err == nil {
+		t.Error("GetLinkStats with nil panel: expected error, got nil")
+	}
+}
+
+func TestReconcilerGetLinkStatsNotFound(t *testing.T) {
+	r := newTestReconciler(t)
+	_, err := r.GetLinkStats("nonexistent")
+	if err == nil {
+		t.Error("GetLinkStats(nonexistent): expected error, got nil")
 	}
 }

@@ -27,17 +27,20 @@ type Reconciler struct {
 	stateFile    string
 	topologyFile string
 	interval     time.Duration
+	panel        *PatchPanel // may be nil if eBPF is unavailable
 }
 
 // NewReconciler creates a Reconciler that persists state to stateFile.
 // If topologyFile is non-empty it will be loaded on first Run() call.
-func NewReconciler(stateFile, topologyFile string, interval time.Duration) *Reconciler {
+// If panel is nil, eBPF operations are skipped (fallback to Phase 1 mode).
+func NewReconciler(stateFile, topologyFile string, interval time.Duration, panel *PatchPanel) *Reconciler {
 	r := &Reconciler{
 		desired:      make(map[string]Link),
 		applied:      make(map[string]Link),
 		stateFile:    stateFile,
 		topologyFile: topologyFile,
 		interval:     interval,
+		panel:        panel,
 	}
 	r.loadState()
 	return r
@@ -97,12 +100,13 @@ func (r *Reconciler) Reconcile() (created, deleted int, errs []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Create missing links
 	for key, link := range r.desired {
 		if _, ok := r.applied[key]; ok {
 			continue
 		}
 		a, b := link.Endpoints[0], link.Endpoints[1]
-		if err := createLink(a.Device, a.Port, b.Device, b.Port); err != nil {
+		if err := r.applyLink(a.Device, a.Port, b.Device, b.Port); err != nil {
 			log.Printf("create %s: %v", key, err)
 			errs = append(errs, fmt.Sprintf("create %s: %v", key, err))
 			continue
@@ -111,11 +115,13 @@ func (r *Reconciler) Reconcile() (created, deleted int, errs []string) {
 		created++
 	}
 
+	// Delete extra links
 	for key, link := range r.applied {
 		if _, ok := r.desired[key]; ok {
 			continue
 		}
 		a, b := link.Endpoints[0], link.Endpoints[1]
+		r.unapplyLink(a.Device, a.Port, b.Device, b.Port)
 		if err := deleteLink(a.Device, a.Port, b.Device, b.Port); err != nil {
 			log.Printf("delete %s: %v", key, err)
 			errs = append(errs, fmt.Sprintf("delete %s: %v", key, err))
@@ -130,6 +136,68 @@ func (r *Reconciler) Reconcile() (created, deleted int, errs []string) {
 		log.Printf("reconcile: %d created, %d deleted", created, deleted)
 	}
 	return
+}
+
+// applyLink creates the veth pairs and (if eBPF is available) configures
+// the BPF map and TC attachments.
+func (r *Reconciler) applyLink(devA, portA, devB, portB string) error {
+	if err := createLink(devA, portA, devB, portB); err != nil {
+		return err
+	}
+
+	// Configure eBPF (skip if not available)
+	if r.panel == nil {
+		return nil
+	}
+
+	wmA := wmIfname(devA, portA)
+	wmB := wmIfname(devB, portB)
+
+	ifIdxA, err := ifindexByName(wmA)
+	if err != nil {
+		return fmt.Errorf("resolve ifindex %s: %w", wmA, err)
+	}
+	ifIdxB, err := ifindexByName(wmB)
+	if err != nil {
+		return fmt.Errorf("resolve ifindex %s: %w", wmB, err)
+	}
+
+	if err := r.panel.UpdateLink(uint32(ifIdxA), uint32(ifIdxB)); err != nil {
+		return fmt.Errorf("update BPF map: %w", err)
+	}
+
+	if err := r.panel.AttachTC(ifIdxA); err != nil {
+		return fmt.Errorf("attach TC on %s: %w", wmA, err)
+	}
+	if err := r.panel.AttachTC(ifIdxB); err != nil {
+		return fmt.Errorf("attach TC on %s: %w", wmB, err)
+	}
+
+	return nil
+}
+
+// unapplyLink detaches TC and removes BPF map entries before the veths
+// are deleted.
+func (r *Reconciler) unapplyLink(devA, portA, devB, portB string) {
+	if r.panel == nil {
+		return
+	}
+
+	wmA := wmIfname(devA, portA)
+	wmB := wmIfname(devB, portB)
+
+	idxA, aErr := ifindexByName(wmA)
+	idxB, bErr := ifindexByName(wmB)
+
+	if aErr == nil {
+		r.panel.DetachTC(idxA)
+	}
+	if bErr == nil {
+		r.panel.DetachTC(idxB)
+	}
+	if aErr == nil && bErr == nil {
+		r.panel.RemoveLink(uint32(idxA), uint32(idxB))
+	}
 }
 
 // Run blocks forever, reconciling on a ticker and reloading the topology
@@ -205,6 +273,53 @@ func (r *Reconciler) DesiredLinks() []Link {
 		links = append(links, l)
 	}
 	return links
+}
+
+// Panel returns the PatchPanel (may be nil).
+func (r *Reconciler) Panel() *PatchPanel {
+	return r.panel
+}
+
+// LinkStatsResponse is the JSON response for GET /v1/links/{key}/stats.
+type LinkStatsResponse struct {
+	LinkID string   `json:"link_id"`
+	AToB   LinkStats `json:"a_to_b"`
+	BToA   LinkStats `json:"b_to_a"`
+}
+
+// GetLinkStats returns per-direction stats for the given link.
+func (r *Reconciler) GetLinkStats(key string) (LinkStatsResponse, error) {
+	r.mu.Lock()
+	link, ok := r.applied[key]
+	r.mu.Unlock()
+	if !ok {
+		return LinkStatsResponse{}, fmt.Errorf("link %q not found in applied set", key)
+	}
+	if r.panel == nil {
+		return LinkStatsResponse{}, fmt.Errorf("eBPF not loaded")
+	}
+
+	a, b := link.Endpoints[0], link.Endpoints[1]
+	wmA := wmIfname(a.Device, a.Port)
+	wmB := wmIfname(b.Device, b.Port)
+
+	ifIdxA, err := ifindexByName(wmA)
+	if err != nil {
+		return LinkStatsResponse{}, fmt.Errorf("resolve %s: %w", wmA, err)
+	}
+	ifIdxB, err := ifindexByName(wmB)
+	if err != nil {
+		return LinkStatsResponse{}, fmt.Errorf("resolve %s: %w", wmB, err)
+	}
+
+	aToB, _ := r.panel.GetStats(uint32(ifIdxA))
+	bToA, _ := r.panel.GetStats(uint32(ifIdxB))
+
+	return LinkStatsResponse{
+		LinkID: key,
+		AToB:   aToB,
+		BToA:   bToA,
+	}, nil
 }
 
 func (r *Reconciler) loadState() {

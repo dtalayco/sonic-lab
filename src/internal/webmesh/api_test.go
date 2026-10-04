@@ -18,7 +18,7 @@ import (
 func newTestAPI(t *testing.T) *API {
 	t.Helper()
 	dir := t.TempDir()
-	rec := NewReconciler(dir+"/state.json", "", time.Hour)
+	rec := NewReconciler(dir+"/state.json", "", time.Hour, nil)
 	return NewAPI(rec, "test")
 }
 
@@ -164,5 +164,39 @@ func TestAPILinksDelete(t *testing.T) {
 	// Deleting a non-existent link should succeed (idempotent)
 	if resp.StatusCode != http.StatusNoContent {
 		t.Errorf("status = %d, want 204", resp.StatusCode)
+	}
+}
+
+func TestAPILinkStatsNoEBPF(t *testing.T) {
+	api := newTestAPI(t)
+	ts := httptest.NewServer(api.Handler())
+	defer ts.Close()
+
+	// Stats endpoint should return 404 when the link doesn't exist
+	resp, err := http.Get(ts.URL + "/v1/links/some-key/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestAPILinkStatsMethodNotAllowed(t *testing.T) {
+	api := newTestAPI(t)
+	ts := httptest.NewServer(api.Handler())
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/links/some-key/stats", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", resp.StatusCode)
 	}
 }
