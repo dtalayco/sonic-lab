@@ -10,7 +10,7 @@ x-sonic-common: &sonic-common
     - seccomp=unconfined
 
 x-debian-common: &debian-common
-  image: debian:bullseye
+  image: debian:bookworm
   platform: linux/amd64
   privileged: true
   tty: true
