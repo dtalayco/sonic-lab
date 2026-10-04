@@ -1,0 +1,238 @@
+/*
+Copyright © 2026 Kyle Mestery All rights reserved.
+Use of this source code is governed by a BSD-style
+license that can be found in the LICENSE file.
+*/
+
+package webmesh
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+)
+
+// Reconciler maintains the desired and applied link sets and drives
+// create/delete operations to converge the two.
+type Reconciler struct {
+	mu           sync.Mutex
+	desired      map[string]Link
+	applied      map[string]Link
+	stateFile    string
+	topologyFile string
+	interval     time.Duration
+}
+
+// NewReconciler creates a Reconciler that persists state to stateFile.
+// If topologyFile is non-empty it will be loaded on first Run() call.
+func NewReconciler(stateFile, topologyFile string, interval time.Duration) *Reconciler {
+	r := &Reconciler{
+		desired:      make(map[string]Link),
+		applied:      make(map[string]Link),
+		stateFile:    stateFile,
+		topologyFile: topologyFile,
+		interval:     interval,
+	}
+	r.loadState()
+	return r
+}
+
+// SetDesired replaces the desired topology and immediately reconciles.
+func (r *Reconciler) SetDesired(t Topology) (created, deleted int, errs []string) {
+	r.mu.Lock()
+	newDesired := make(map[string]Link, len(t.Links))
+	for _, l := range t.Links {
+		if len(l.Endpoints) != 2 {
+			errs = append(errs, fmt.Sprintf("skipping link %q: expected 2 endpoints, got %d", l.Key(), len(l.Endpoints)))
+			continue
+		}
+		newDesired[l.Key()] = l
+	}
+	r.desired = newDesired
+	r.mu.Unlock()
+
+	return r.Reconcile()
+}
+
+// AddLink adds a single link to the desired set and reconciles.
+func (r *Reconciler) AddLink(l Link) error {
+	if len(l.Endpoints) != 2 {
+		return fmt.Errorf("link must have exactly 2 endpoints")
+	}
+	r.mu.Lock()
+	r.desired[l.Key()] = l
+	r.mu.Unlock()
+
+	_, _, errs := r.Reconcile()
+	if len(errs) > 0 {
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// RemoveLink removes a link (by key) from the desired set and reconciles.
+func (r *Reconciler) RemoveLink(key string) error {
+	r.mu.Lock()
+	delete(r.desired, key)
+	r.mu.Unlock()
+
+	_, _, errs := r.Reconcile()
+	if len(errs) > 0 {
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// Reconcile creates links that are desired but not yet applied, and deletes
+// links that are applied but no longer desired.
+func (r *Reconciler) Reconcile() (created, deleted int, errs []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for key, link := range r.desired {
+		if _, ok := r.applied[key]; ok {
+			continue
+		}
+		a, b := link.Endpoints[0], link.Endpoints[1]
+		if err := createLink(a.Device, a.Port, b.Device, b.Port); err != nil {
+			log.Printf("create %s: %v", key, err)
+			errs = append(errs, fmt.Sprintf("create %s: %v", key, err))
+			continue
+		}
+		r.applied[key] = link
+		created++
+	}
+
+	for key, link := range r.applied {
+		if _, ok := r.desired[key]; ok {
+			continue
+		}
+		a, b := link.Endpoints[0], link.Endpoints[1]
+		if err := deleteLink(a.Device, a.Port, b.Device, b.Port); err != nil {
+			log.Printf("delete %s: %v", key, err)
+			errs = append(errs, fmt.Sprintf("delete %s: %v", key, err))
+			continue
+		}
+		delete(r.applied, key)
+		deleted++
+	}
+
+	if created > 0 || deleted > 0 {
+		r.saveState()
+		log.Printf("reconcile: %d created, %d deleted", created, deleted)
+	}
+	return
+}
+
+// Run blocks forever, reconciling on a ticker and reloading the topology
+// file on SIGHUP. Call in a goroutine.
+func (r *Reconciler) Run() {
+	if r.topologyFile != "" {
+		top, err := LoadTopologyFile(r.topologyFile)
+		if err != nil {
+			log.Printf("warning: could not load topology file %s: %v", r.topologyFile, err)
+		} else {
+			log.Printf("loaded %d links from %s", len(top.Links), r.topologyFile)
+			r.SetDesired(top)
+		}
+	}
+
+	// Initial reconcile
+	r.Reconcile()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGHUP)
+
+	ticker := time.NewTicker(r.interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			r.Reconcile()
+		case <-sigCh:
+			log.Println("SIGHUP: reloading topology file")
+			if r.topologyFile != "" {
+				if top, err := LoadTopologyFile(r.topologyFile); err != nil {
+					log.Printf("reload error: %v", err)
+				} else {
+					r.SetDesired(top)
+				}
+			}
+		}
+	}
+}
+
+// DesiredCount returns the number of links in the desired set.
+func (r *Reconciler) DesiredCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.desired)
+}
+
+// AppliedCount returns the number of links in the applied set.
+func (r *Reconciler) AppliedCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.applied)
+}
+
+// AppliedLinks returns a slice of all applied links.
+func (r *Reconciler) AppliedLinks() []Link {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	links := make([]Link, 0, len(r.applied))
+	for _, l := range r.applied {
+		links = append(links, l)
+	}
+	return links
+}
+
+// DesiredLinks returns a slice of all desired links.
+func (r *Reconciler) DesiredLinks() []Link {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	links := make([]Link, 0, len(r.desired))
+	for _, l := range r.desired {
+		links = append(links, l)
+	}
+	return links
+}
+
+func (r *Reconciler) loadState() {
+	data, err := os.ReadFile(r.stateFile)
+	if err != nil {
+		return
+	}
+	var s struct {
+		Applied []Link `json:"applied"`
+	}
+	if err := json.Unmarshal(data, &s); err != nil {
+		log.Printf("warning: could not parse state file %s: %v", r.stateFile, err)
+		return
+	}
+	for _, l := range s.Applied {
+		r.applied[l.Key()] = l
+	}
+	if len(r.applied) > 0 {
+		log.Printf("restored %d applied links from %s", len(r.applied), r.stateFile)
+	}
+}
+
+func (r *Reconciler) saveState() {
+	links := make([]Link, 0, len(r.applied))
+	for _, l := range r.applied {
+		links = append(links, l)
+	}
+	s := struct {
+		Applied []Link `json:"applied"`
+	}{Applied: links}
+	data, _ := json.MarshalIndent(s, "", "  ")
+	_ = os.WriteFile(r.stateFile, data, 0o644)
+}

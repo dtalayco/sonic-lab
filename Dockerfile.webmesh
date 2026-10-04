@@ -1,0 +1,20 @@
+# Stage 1: Build the Go binary
+FROM golang:1.22-bullseye AS builder
+WORKDIR /app
+COPY src/go.mod src/go.sum ./
+RUN go mod download
+COPY src/ .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /webmesh ./cmd/webmesh
+
+# Stage 2: Minimal runtime image
+FROM debian:bullseye
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        docker.io \
+        iproute2 \
+        util-linux \
+        curl \
+        ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=builder /webmesh /usr/local/bin/webmesh
+ENTRYPOINT ["/usr/local/bin/webmesh"]

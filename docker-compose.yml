@@ -16,12 +16,34 @@ x-debian-common: &debian-common
   tty: true
   volumes:
     - ./init_linux.sh:/init_linux.sh:ro
-    - ./create_vnet.sh:/create_vnet.sh:ro
     - /var/run/docker.sock:/var/run/docker.sock
     - ./tmp/vnet_ready:/tmp/vnet_ready:rw
   shm_size: "2gb"
 
 services:
+  #################################
+  # Webmesh patch panel container #
+  #################################
+
+  webmesh:
+    build:
+      context: .
+      dockerfile: Dockerfile.webmesh
+    image: sonic-lab/webmesh:latest
+    platform: linux/amd64
+    privileged: true
+    pid: "host"
+    container_name: webmesh
+    volumes:
+      - ./src/sample.yml:/etc/webmesh/topology.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./tmp/vnet_ready:/tmp/vnet_ready:rw
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9090/v1/status | grep -q '\"healthy\":true'"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
   ###########################
   # Backing Linux containers #
   ###########################
@@ -49,7 +71,10 @@ services:
     <<: *sonic-common
     container_name: sonic-spine1
     depends_on:
-      - spine1-linux
+      webmesh:
+        condition: service_healthy
+      spine1-linux:
+        condition: service_started
     network_mode: "service:spine1-linux"
     volumes:
       - ./tmp/vnet_ready:/tmp/vnet_ready:ro
@@ -61,7 +86,10 @@ services:
     <<: *sonic-common
     container_name: sonic-leaf1
     depends_on:
-      - leaf1-linux
+      webmesh:
+        condition: service_healthy
+      leaf1-linux:
+        condition: service_started
     network_mode: "service:leaf1-linux"
     volumes:
       - ./tmp/vnet_ready:/tmp/vnet_ready:ro
@@ -73,11 +101,13 @@ services:
     <<: *sonic-common
     container_name: sonic-leaf2
     depends_on:
-      - leaf2-linux
+      webmesh:
+        condition: service_healthy
+      leaf2-linux:
+        condition: service_started
     network_mode: "service:leaf2-linux"
     volumes:
       - ./tmp/vnet_ready:/tmp/vnet_ready:ro
       - /var/run/redis-vs/leaf2:/var/run/redis
       - ./sonic_entry.sh:/sonic_entry.sh:ro
     entrypoint: ["/bin/bash", "/sonic_entry.sh", "leaf2-linux"]
-    

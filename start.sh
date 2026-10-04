@@ -20,7 +20,31 @@ while getopts ":l" opt; do
 echo "Stopping existing topology..."
 docker compose down -v || true
 
-echo "Starting topology..."
+echo "Building webmesh image..."
+docker compose build webmesh
+
+echo "Starting webmesh patch panel..."
+docker compose up -d webmesh
+
+echo "Starting backing Linux containers..."
+docker compose up -d spine1-linux leaf1-linux leaf2-linux
+
+echo "Waiting for webmesh to wire all links..."
+for i in $(seq 1 60); do
+    status=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}starting{{end}}' webmesh 2>/dev/null || echo "starting")
+    if [ "$status" = "healthy" ]; then
+        echo "webmesh is healthy — all links wired"
+        break
+    fi
+    if [ "$i" -eq 60 ]; then
+        echo "Timed out waiting for webmesh"
+        docker logs webmesh
+        exit 1
+    fi
+    sleep 2
+done
+
+echo "Starting SONiC containers..."
 docker compose up -d
 
 echo
