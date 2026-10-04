@@ -1,5 +1,5 @@
 # Stage 1: Build the eBPF patch panel object
-FROM debian:bullseye AS bpf-builder
+FROM debian:bookworm AS bpf-builder
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         clang \
@@ -10,7 +10,7 @@ COPY src/bpf/patch_panel.c .
 RUN clang -O2 -target bpf -c patch_panel.c -o patch_panel.o
 
 # Stage 2: Build the Go binary
-FROM golang:1.22-bullseye AS go-builder
+FROM golang:1.25-bookworm AS go-builder
 WORKDIR /app
 COPY src/go.mod src/go.sum ./
 RUN go mod download
@@ -18,7 +18,7 @@ COPY src/ .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /webmesh ./cmd/webmesh
 
 # Stage 3: Minimal runtime image
-FROM debian:bullseye
+FROM debian:bookworm
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         docker.io \
