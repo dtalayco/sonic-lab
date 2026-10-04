@@ -27,25 +27,25 @@ topology:
 
   links:
     - endpoints:
-        - device: spine1
+        - device: spine1-linux
           port: Ethernet0
-        - device: leaf1
+        - device: leaf1-linux
           port: Ethernet0
 
     - endpoints:
-        - device: spine1
+        - device: spine1-linux
           port: Ethernet4
-        - device: leaf1
+        - device: leaf1-linux
           port: Ethernet4
 
     - endpoints:
-        - device: spine1
+        - device: spine1-linux
           port: Ethernet8
-        - device: leaf2
+        - device: leaf2-linux
           port: Ethernet0
 
     - endpoints:
-        - device: spine1
+        - device: spine1-linux
           port: Ethernet12
-        - device: leaf2
+        - device: leaf2-linux
           port: Ethernet4
