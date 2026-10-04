@@ -57,7 +57,9 @@ func (r *Reconciler) SetDesired(t Topology) (created, deleted int, errs []string
 	r.desired = newDesired
 	r.mu.Unlock()
 
-	return r.Reconcile()
+	created, deleted, recErrs := r.Reconcile()
+	errs = append(errs, recErrs...)
+	return created, deleted, errs
 }
 
 // AddLink adds a single link to the desired set and reconciles.
