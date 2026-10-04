@@ -17,6 +17,7 @@ interface in the remote switch's namespace).
 */
 
 #include <linux/bpf.h>
+#include <linux/pkt_cls.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
