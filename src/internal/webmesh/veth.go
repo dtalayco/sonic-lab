@@ -52,6 +52,31 @@ func linkInNS(pid int, ifname string) bool {
 	return exec.Command("nsenter", "-t", strconv.Itoa(pid), "-n", "ip", "link", "show", ifname).Run() == nil
 }
 
+// linkIsUp checks whether a network interface is administratively UP
+// in the given PID's netns.
+func linkIsUp(pid int, ifname string) bool {
+	out, err := exec.Command("nsenter", "-t", strconv.Itoa(pid), "-n", "ip", "link", "show", ifname).Output()
+	if err != nil {
+		return false
+	}
+	s := string(out)
+	idx := strings.Index(s, "<")
+	if idx < 0 {
+		return false
+	}
+	end := strings.Index(s[idx:], ">")
+	if end < 0 {
+		return false
+	}
+	flags := s[idx : idx+end]
+	for _, f := range strings.Split(flags, ",") {
+		if strings.TrimSpace(f) == "UP" {
+			return true
+		}
+	}
+	return false
+}
+
 // ifindexByName returns the ifindex of a link in the current namespace.
 func ifindexByName(name string) (int, error) {
 	out, err := exec.Command("ip", "-j", "link", "show", name).Output()

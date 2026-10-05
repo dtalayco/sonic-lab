@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -135,11 +136,65 @@ func (r *Reconciler) Reconcile() (created, deleted int, errs []string) {
 		deleted++
 	}
 
+	// Drift correction: verify applied links are actually UP
+	r.verifyLinks()
+
 	if created > 0 || deleted > 0 {
 		r.saveState()
 		log.Printf("reconcile: %d created, %d deleted", created, deleted)
 	}
 	return
+}
+
+// verifyLinks checks all applied links and corrects drift:
+//   - If interfaces are missing (container restarted), removes from applied
+//     so the next cycle re-creates them.
+//   - If interfaces exist but are DOWN, brings them back UP
+//     (unless explicitly downed via the flap API).
+func (r *Reconciler) verifyLinks() {
+	for key, link := range r.applied {
+		// Respect explicit down state from the flap API
+		if down, ok := r.linkStates[key]; ok && !down {
+			continue
+		}
+		a, b := link.Endpoints[0], link.Endpoints[1]
+
+		pidA, errA := containerPID(a.Device)
+		pidB, errB := containerPID(b.Device)
+		if errA != nil || errB != nil {
+			// Container not running yet; skip
+			continue
+		}
+
+		// Check if interfaces exist; if not, mark for re-creation
+		if !linkInNS(pidA, a.Port) || !linkInNS(pidB, b.Port) {
+			log.Printf("verify: link %s interfaces missing, will re-create", key)
+			r.unapplyLink(a.Device, a.Port, b.Device, b.Port)
+			delete(r.applied, key)
+			r.saveState()
+			continue
+		}
+
+		// Interfaces exist; ensure they are UP
+		wmA := wmIfname(a.Device, a.Port)
+		wmB := wmIfname(b.Device, b.Port)
+
+		needUp := false
+		if !linkIsUp(pidA, a.Port) {
+			needUp = true
+			runQuiet("nsenter", "-t", strconv.Itoa(pidA), "-n", "ip", "link", "set", a.Port, "up")
+		}
+		if !linkIsUp(pidB, b.Port) {
+			needUp = true
+			runQuiet("nsenter", "-t", strconv.Itoa(pidB), "-n", "ip", "link", "set", b.Port, "up")
+		}
+		if needUp {
+			// Also ensure webmesh-side is up
+			runQuiet("ip", "link", "set", wmA, "up")
+			runQuiet("ip", "link", "set", wmB, "up")
+			log.Printf("verify: brought link %s back up", key)
+		}
+	}
 }
 
 // applyLink creates the veth pairs and (if eBPF is available) configures

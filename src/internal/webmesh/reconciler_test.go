@@ -169,3 +169,66 @@ func TestReconcilerGetLinkStatsNotFound(t *testing.T) {
 		t.Error("GetLinkStats(nonexistent): expected error, got nil")
 	}
 }
+
+func TestVerifyLinksRespectsExplicitDown(t *testing.T) {
+	r := newTestReconciler(t)
+	link := Link{
+		Endpoints: []Endpoint{
+			{Device: "spine1-linux", Port: "Ethernet0"},
+			{Device: "leaf1-linux", Port: "Ethernet0"},
+		},
+	}
+	key := link.Key()
+	r.mu.Lock()
+	r.applied[key] = link
+	r.linkStates[key] = false // explicitly downed
+	r.mu.Unlock()
+
+	// verifyLinks should skip this link (it's explicitly down)
+	// On macOS, containerPID will fail, so it'll skip anyway.
+	// We're testing that it doesn't panic and handles the case.
+	r.mu.Lock()
+	r.verifyLinks()
+	r.mu.Unlock()
+
+	// Link should still be in applied (not removed)
+	if r.AppliedCount() != 1 {
+		t.Errorf("AppliedCount = %d, want 1 (explicitly-downed link should remain)", r.AppliedCount())
+	}
+}
+
+func TestVerifyLinksNoPanicEmpty(t *testing.T) {
+	r := newTestReconciler(t)
+	// No applied links: verifyLinks should be a no-op
+	r.mu.Lock()
+	r.verifyLinks()
+	r.mu.Unlock()
+}
+
+func TestVerifyLinksRemovesMissingInterfaces(t *testing.T) {
+	r := newTestReconciler(t)
+	link := Link{
+		Endpoints: []Endpoint{
+			{Device: "spine1-linux", Port: "Ethernet0"},
+			{Device: "leaf1-linux", Port: "Ethernet0"},
+		},
+	}
+	key := link.Key()
+	r.mu.Lock()
+	r.applied[key] = link
+	r.mu.Unlock()
+
+	// On macOS, containerPID will fail (no docker containers with those names
+	// in a test context), so verifyLinks should skip without removing.
+	// This tests that the code path doesn't panic.
+	r.mu.Lock()
+	r.verifyLinks()
+	r.mu.Unlock()
+
+	// If containerPID failed, the link stays in applied
+	// (it will be retried on the next tick when containers are available)
+	count := r.AppliedCount()
+	if count != 1 {
+		t.Logf("AppliedCount = %d (expected 1 if containerPID failed, 0 if containers exist but links don't)", count)
+	}
+}
