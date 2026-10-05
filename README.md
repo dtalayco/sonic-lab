@@ -110,7 +110,7 @@ docker exec sonic-spine1 ping -c 3 10.0.0.2
 The webmesh container serves a dashboard at:
 
 ```
-http://localhost:8080
+http://localhost:8092
 ```
 
 This shows all links, their state (up/down), and packet/byte stats from
@@ -118,7 +118,7 @@ the eBPF program. The page auto-refreshes every 2 seconds.
 
 ## Webmesh REST API
 
-Base URL: `http://localhost:8080`
+Base URL: `http://localhost:8092`
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -135,19 +135,19 @@ Base URL: `http://localhost:8080`
 
 ```bash
 # Take the spine1-leaf1 link down
-curl -X POST http://localhost:8080/v1/links/spine1-leaf1/down
+curl -X POST http://localhost:8092/v1/links/spine1-leaf1/down
 
 # Verify SONiC detects the link-down
 docker exec sonic-spine1 show interfaces status
 
 # Bring it back up
-curl -X POST http://localhost:8080/v1/links/spine1-leaf1/up
+curl -X POST http://localhost:8092/v1/links/spine1-leaf1/up
 ```
 
 ### Example: View link stats
 
 ```bash
-curl -s http://localhost:8080/v1/stats | python3 -m json.tool
+curl -s http://localhost:8092/v1/stats | python3 -m json.tool
 ```
 
 ## Topology File
