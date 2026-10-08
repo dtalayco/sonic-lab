@@ -1,4 +1,4 @@
-module sonic-lab
+module sonic-lab/webmesh
 
 go 1.25.5
 

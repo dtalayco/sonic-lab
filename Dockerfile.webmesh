@@ -8,7 +8,7 @@ RUN apt-get update && \
         libelf-dev && \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY src/bpf/patch_panel.c .
+COPY webmesh/bpf/patch_panel.c .
 # Combine symlink fix + compile in one layer to avoid BuildKit cache issues;
 # -I /usr/include ensures the BPF target searches system headers explicitly.
 RUN rm -rf /usr/include/asm && \
@@ -18,9 +18,9 @@ RUN rm -rf /usr/include/asm && \
 # Stage 2: Build the Go binary
 FROM golang:1.25-bookworm AS go-builder
 WORKDIR /app
-COPY src/go.mod src/go.sum ./
+COPY webmesh/go.mod webmesh/go.sum ./
 RUN go mod download
-COPY src/ .
+COPY webmesh/ .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /webmesh ./cmd/webmesh
 
 # Stage 3: Minimal runtime image

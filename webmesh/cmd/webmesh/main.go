@@ -22,7 +22,7 @@ import (
 	"syscall"
 	"time"
 
-	"sonic-lab/internal/webmesh"
+	"sonic-lab/webmesh/internal"
 )
 
 func main() {

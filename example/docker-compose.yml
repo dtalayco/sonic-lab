@@ -11,7 +11,7 @@ x-sonic-common: &sonic-common
 
 x-debian-common: &debian-common
   build:
-    context: .
+    context: ..
     dockerfile: Dockerfile.debian
   image: sonic-lab/debian:latest
   platform: linux/amd64
@@ -30,7 +30,7 @@ services:
 
   webmesh:
     build:
-      context: .
+      context: ..
       dockerfile: Dockerfile.webmesh
     image: sonic-lab/webmesh:latest
     platform: linux/amd64
@@ -40,7 +40,7 @@ services:
     ports:
       - "8092:9090"
     volumes:
-      - ./src/sample.yml:/etc/webmesh/topology.yml:ro
+      - ./sample.yml:/etc/webmesh/topology.yml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./tmp/vnet_ready:/tmp/vnet_ready:rw
     healthcheck:
