@@ -59,19 +59,21 @@ jobs:
           # Validate the docker-compose.yml syntax
           docker compose config --quiet
 
+      - name: Build all images
+        run: |
+          docker compose build
+
       - name: Bring up all services
         run: |
           # Start all linux containers
           docker compose up -d spine1-linux leaf1-linux leaf2-linux
-          
+
           # Wait for containers to be ready
           echo "Waiting for linux containers to start..."
-          sleep 90
+          sleep 10
 
-          # Create veth interfaces
-          sudo ./create_vnet.sh
-
-          # Now, start the sonic containers
+          # Now, start webmesh + sonic containers
+          # (webmesh handles all veth wiring via its reconciler)
           docker compose up -d
 
           # Now wait for sonic containers to be ready
