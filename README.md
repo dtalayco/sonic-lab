@@ -6,6 +6,30 @@ container images. The lab builds a simple spine–leaf topology using an
 eBPF-powered **webmesh** patch panel container for dynamic, API-driven
 network wiring between switches.
 
+## Repository Layout
+
+```
+├── webmesh/          # Go module: sonic-lab/webmesh
+│   ├── cmd/webmesh/      # Server entrypoint
+│   ├── cmd/webmeshctl/   # Operator CLI (wait, push, links)
+│   ├── internal/         # Core packages (api, reconciler, veth, ebpf, ...)
+│   ├── bpf/              # eBPF C program (patch_panel.c)
+│   └── sample.yml        # Reference topology
+├── tgen/             # Go module: sonic-lab/tgen
+│   ├── main.go             # CLI entrypoint
+│   └── internal/           # reader (YAML→compose), writer (scripts)
+├── example/          # Working 3-switch spine-leaf topology
+│   ├── docker-compose.yml
+│   ├── sample.yml
+│   ├── init_linux.sh
+│   ├── sonic_entry.sh
+│   └── tmp/vnet_ready/
+├── Dockerfile.webmesh  # Multi-stage build for the webmesh container
+├── Dockerfile.debian   # Backing Linux image (iproute2, util-linux, docker.io)
+├── start.sh            # Convenience script to start the example lab
+└── docs/webmesh-design.md
+```
+
 ## Topology
 
 ```
@@ -64,22 +88,28 @@ This lab is intended to run on macOS using **Colima** with amd64 emulation
 colima start --vm-type vz --vz-rosetta --cpu 4 --memory 8 --mount-type virtiofs
 ```
 
-### 2. Build the webmesh image
+### 2. Build images
 
 ```bash
-docker build -f Dockerfile.webmesh -t sonic-lab/webmesh:latest .
+docker compose -f example/docker-compose.yml build
 ```
 
-### 3. Pull SONiC images (first time only)
+Or use the convenience script (also pulls the SONiC image on first run):
 
 ```bash
 ./start.sh -l
 ```
 
-### 4. Start the lab
+### 3. Start the lab
 
 ```bash
-docker compose up -d
+./start.sh
+```
+
+Or manually:
+
+```bash
+docker compose -f example/docker-compose.yml up -d
 ```
 
 The webmesh container starts first and performs a healthcheck. SONiC
@@ -87,7 +117,7 @@ containers are gated on `webmesh` being healthy (all desired links
 applied). Once healthy, SONiC boots and attaches to the pre-wired
 interfaces.
 
-### 5. Wait and verify
+### 4. Wait and verify
 
 SONiC takes a few minutes to boot. Watch progress:
 
@@ -123,7 +153,7 @@ Base URL: `http://localhost:8092`
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/v1/topology` | GET | Current desired topology |
-| `/v1/topology` | PUT | Replace desired topology (JSON) |
+| `/v1/topology` | PUT | Replace desired topology (YAML or JSON) |
 | `/v1/links` | GET | List all links with state + stats |
 | `/v1/links/{key}` | GET | Inspect a single link |
 | `/v1/links/{key}/up` | POST | Bring a link up |
@@ -152,25 +182,97 @@ curl -s http://localhost:8092/v1/stats | python3 -m json.tool
 
 ## Topology File
 
-The desired topology is loaded from `topology.json` (mounted into the
-webmesh container). The file watcher polls for changes every second and
-reconciles automatically.
+The desired topology is defined in a YAML file (e.g., `example/sample.yml`)
+and mounted into the webmesh container at `/etc/webmesh/topology.yml`. The
+file watcher polls for changes (mtime) and the reconciler applies
+differences every 5 seconds.
 
-Example `topology.json`:
+Example topology (`example/sample.yml`):
 
-```json
-{
-  "links": [
-    {"key": "spine1-leaf1", "sw_a": "spine1", "port_a": 0, "sw_b": "leaf1", "port_b": 0},
-    {"key": "spine1-leaf1b", "sw_a": "spine1", "port_a": 4, "sw_b": "leaf1", "port_b": 4},
-    {"key": "spine1-leaf2", "sw_a": "spine1", "port_a": 8, "sw_b": "leaf2", "port_b": 0},
-    {"key": "spine1-leaf2b", "sw_a": "spine1", "port_a": 12, "sw_b": "leaf2", "port_b": 4}
-  ]
-}
+```yaml
+topology:
+  name: spine-leaf-lab
+  switches:
+    spine1:
+      role: spine
+      asn: 65000
+      ports:
+        Ethernet0: {}
+        Ethernet4: {}
+        Ethernet8: {}
+        Ethernet12: {}
+    leaf1:
+      role: leaf
+      asn: 65101
+      ports:
+        Ethernet0: {}
+        Ethernet4: {}
+    leaf2:
+      role: leaf
+      asn: 65102
+      ports:
+        Ethernet0: {}
+        Ethernet4: {}
+  links:
+    - endpoints:
+        - device: spine1-linux
+          port: Ethernet0
+        - device: leaf1-linux
+          port: Ethernet0
+    - endpoints:
+        - device: spine1-linux
+          port: Ethernet4
+        - device: leaf1-linux
+          port: Ethernet4
+    - endpoints:
+        - device: spine1-linux
+          port: Ethernet8
+        - device: leaf2-linux
+          port: Ethernet0
+    - endpoints:
+        - device: spine1-linux
+          port: Ethernet12
+        - device: leaf2-linux
+          port: Ethernet4
 ```
 
-To change the topology at runtime, edit the file (or use the PUT API) and
-the reconciler will apply changes within ~5 seconds.
+To change the topology at runtime, edit the mounted file (or use the PUT
+API) and the reconciler will apply changes within ~5 seconds.
+
+## Generating New Topologies with tgen
+
+The `tgen` tool reads a topology YAML file and generates a complete
+`docker-compose.yml` + supporting scripts for a new lab:
+
+```bash
+cd tgen
+go build -o tgen .
+./tgen -o ../example/ sample.yml
+```
+
+> **Note:** The output directory must be a direct child of the repo root
+> (e.g., `example/`, `mylab/`) because the generated compose file uses
+> relative paths (`context: ..`) to reference `Dockerfile.webmesh` and
+> `Dockerfile.debian`.
+
+## webmeshctl CLI
+
+The `webmeshctl` tool provides convenience commands for interacting with a
+running webmesh instance:
+
+```bash
+cd webmesh
+go build -o webmeshctl ./cmd/webmeshctl
+
+# Wait for webmesh to become healthy
+./webmeshctl wait
+
+# Push a new topology at runtime
+./webmeshctl push -config my-topology.yml
+
+# List all wired links
+./webmeshctl links
+```
 
 ## Logging Into the Switches
 
@@ -183,13 +285,13 @@ docker exec -it sonic-leaf2 bash
 ## Cleaning Up
 
 ```bash
-docker compose down
+docker compose -f example/docker-compose.yml down
 ```
 
 To also remove the webmesh image:
 
 ```bash
-docker compose down && docker rmi sonic-lab/webmesh:latest
+docker compose -f example/docker-compose.yml down && docker rmi sonic-lab/webmesh:latest
 ```
 
 ## How the Networking Works
@@ -228,10 +330,11 @@ overhead — no L2 switch, no routing, just a redirect.
 * The webmesh container requires `privileged: true` and access to
   `/var/run/docker.sock` (for namespace operations)
 * The reconciler retries every 5 seconds until desired state is applied
-* State is persisted to `/etc/webmesh/state.json` inside the container
+* State is persisted to `/var/run/webmesh/state.json` inside the container
 
 ## References
 
 - [SONiC Documentation](https://github.com/sonic-net/SONiC)
 - [webmesh Design Document](docs/webmesh-design.md)
 - [libbpf Documentation](https://github.com/libbpf/libbpf)
+- [cilium/ebpf](https://github.com/cilium/ebpf)
