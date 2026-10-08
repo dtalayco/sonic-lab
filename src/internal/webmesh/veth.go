@@ -108,12 +108,14 @@ func ifindexByName(name string) (int, error) {
 //
 //   switch A netns       webmesh netns        switch B netns
 //   ┌──────────┐  veth  ┌────────────┐  eBPF ┌────────────┐  veth ┌──────────┐
-//   │ EthernetX│◄──────►│ wm-a-x     │◄─────►│ wm-b-y     │◄──────►│ EthernetY│
+//   │  ethN    │◄──────►│ wm-a-x     │◄─────►│ wm-b-y     │◄──────►│  ethM    │
 //   └──────────┘        └────────────┘       └────────────┘        └──────────┘
 //
 // The webmesh-side endpoints (wm-a-x, wm-b-y) remain in the webmesh
 // namespace. The switch-side endpoints are moved into the respective
-// switch namespaces and renamed to the SONiC port names.
+// switch namespaces and renamed to the SONiC kernel interface names
+// (ethN), which SAI VS maps to logical ports (EthernetN) via the
+// lane-based lanemap.
 //
 // The operation is idempotent: if either switch-side endpoint already
 // exists in its target namespace, the function returns nil.
@@ -127,8 +129,11 @@ func createLink(devA, portA, devB, portB string) error {
 		return fmt.Errorf("resolve %s: %w", devB, err)
 	}
 
+	ka := kernelIfname(portA)
+	kb := kernelIfname(portB)
+
 	// Idempotency: if either switch-side endpoint already exists, skip
-	if linkInNS(pidA, portA) || linkInNS(pidB, portB) {
+	if linkInNS(pidA, ka) || linkInNS(pidB, kb) {
 		log.Printf("link %s:%s <-> %s:%s already exists, skipping", devA, portA, devB, portB)
 		return nil
 	}
@@ -148,9 +153,9 @@ func createLink(devA, portA, devB, portB string) error {
 		return fmt.Errorf("move %s → %s: %w", swA, devA, err)
 	}
 
-	if err := run("nsenter", "-t", strconv.Itoa(pidA), "-n", "ip", "link", "set", swA, "name", portA); err != nil {
+	if err := run("nsenter", "-t", strconv.Itoa(pidA), "-n", "ip", "link", "set", swA, "name", ka); err != nil {
 		cleanupWmPair(wmA)
-		return fmt.Errorf("rename %s→%s in %s: %w", swA, portA, devA, err)
+		return fmt.Errorf("rename %s→%s in %s: %w", swA, ka, devA, err)
 	}
 
 	// --- Veth pair B: webmesh ↔ switch B ---
@@ -165,19 +170,20 @@ func createLink(devA, portA, devB, portB string) error {
 		return fmt.Errorf("move %s → %s: %w", swB, devB, err)
 	}
 
-	if err := run("nsenter", "-t", strconv.Itoa(pidB), "-n", "ip", "link", "set", swB, "name", portB); err != nil {
+	if err := run("nsenter", "-t", strconv.Itoa(pidB), "-n", "ip", "link", "set", swB, "name", kb); err != nil {
 		cleanupWmPair(wmA)
 		cleanupWmPair(wmB)
-		return fmt.Errorf("rename %s→%s in %s: %w", swB, portB, devB, err)
+		return fmt.Errorf("rename %s→%s in %s: %w", swB, kb, devB, err)
 	}
 
 	// Bring up all four endpoints (best-effort)
 	runQuiet("ip", "link", "set", wmA, "up")
 	runQuiet("ip", "link", "set", wmB, "up")
-	runQuiet("nsenter", "-t", strconv.Itoa(pidA), "-n", "ip", "link", "set", portA, "up")
-	runQuiet("nsenter", "-t", strconv.Itoa(pidB), "-n", "ip", "link", "set", portB, "up")
+	runQuiet("nsenter", "-t", strconv.Itoa(pidA), "-n", "ip", "link", "set", ka, "up")
+	runQuiet("nsenter", "-t", strconv.Itoa(pidB), "-n", "ip", "link", "set", kb, "up")
 
-	log.Printf("created link %s:%s <-> %s:%s (wm: %s, %s)", devA, portA, devB, portB, wmA, wmB)
+	log.Printf("created link %s:%s <-> %s:%s (kernel: %s, %s; wm: %s, %s)",
+		devA, portA, devB, portB, ka, kb, wmA, wmB)
 	return nil
 }
 

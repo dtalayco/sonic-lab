@@ -166,8 +166,11 @@ func (r *Reconciler) verifyLinks() {
 			continue
 		}
 
+		ka := kernelIfname(a.Port)
+		kb := kernelIfname(b.Port)
+
 		// Check if interfaces exist; if not, mark for re-creation
-		if !linkInNS(pidA, a.Port) || !linkInNS(pidB, b.Port) {
+		if !linkInNS(pidA, ka) || !linkInNS(pidB, kb) {
 			log.Printf("verify: link %s interfaces missing, will re-create", key)
 			r.unapplyLink(a.Device, a.Port, b.Device, b.Port)
 			delete(r.applied, key)
@@ -180,13 +183,13 @@ func (r *Reconciler) verifyLinks() {
 		wmB := wmIfname(b.Device, b.Port)
 
 		needUp := false
-		if !linkIsUp(pidA, a.Port) {
+		if !linkIsUp(pidA, ka) {
 			needUp = true
-			runQuiet("nsenter", "-t", strconv.Itoa(pidA), "-n", "ip", "link", "set", a.Port, "up")
+			runQuiet("nsenter", "-t", strconv.Itoa(pidA), "-n", "ip", "link", "set", ka, "up")
 		}
-		if !linkIsUp(pidB, b.Port) {
+		if !linkIsUp(pidB, kb) {
 			needUp = true
-			runQuiet("nsenter", "-t", strconv.Itoa(pidB), "-n", "ip", "link", "set", b.Port, "up")
+			runQuiet("nsenter", "-t", strconv.Itoa(pidB), "-n", "ip", "link", "set", kb, "up")
 		}
 		if needUp {
 			// Also ensure webmesh-side is up
