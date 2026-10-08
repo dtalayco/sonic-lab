@@ -14,15 +14,17 @@ network wiring between switches.
 │   ├── cmd/webmeshctl/   # Operator CLI (wait, push, links)
 │   ├── internal/         # Core packages (api, reconciler, veth, ebpf, ...)
 │   ├── bpf/              # eBPF C program (patch_panel.c)
-│   └── sample.yml        # Reference topology
+│   └── sample.yml        # Reference topology (YAML format example)
 ├── tgen/             # Go module: sonic-lab/tgen
 │   ├── main.go             # CLI entrypoint
-│   └── internal/           # reader (YAML→compose), writer (scripts)
+│   ├── README.md           # Full tgen documentation
+│   └── internal/           # topo (generator), writer (file output)
 ├── example/          # Working 3-switch spine-leaf topology
 │   ├── docker-compose.yml
-│   ├── sample.yml
+│   ├── topology.yml
 │   ├── init_linux.sh
 │   ├── sonic_entry.sh
+│   ├── start.sh
 │   └── tmp/vnet_ready/
 ├── Dockerfile.webmesh  # Multi-stage build for the webmesh container
 ├── Dockerfile.debian   # Backing Linux image (iproute2, util-linux, docker.io)
@@ -182,73 +184,32 @@ curl -s http://localhost:8092/v1/stats | python3 -m json.tool
 
 ## Topology File
 
-The desired topology is defined in a YAML file (e.g., `example/sample.yml`)
+The desired topology is defined in a YAML file (e.g., `example/topology.yml`)
 and mounted into the webmesh container at `/etc/webmesh/topology.yml`. The
 file watcher polls for changes (mtime) and the reconciler applies
 differences every 5 seconds.
-
-Example topology (`example/sample.yml`):
-
-```yaml
-topology:
-  name: spine-leaf-lab
-  switches:
-    spine1:
-      role: spine
-      asn: 65000
-      ports:
-        Ethernet0: {}
-        Ethernet4: {}
-        Ethernet8: {}
-        Ethernet12: {}
-    leaf1:
-      role: leaf
-      asn: 65101
-      ports:
-        Ethernet0: {}
-        Ethernet4: {}
-    leaf2:
-      role: leaf
-      asn: 65102
-      ports:
-        Ethernet0: {}
-        Ethernet4: {}
-  links:
-    - endpoints:
-        - device: spine1-linux
-          port: Ethernet0
-        - device: leaf1-linux
-          port: Ethernet0
-    - endpoints:
-        - device: spine1-linux
-          port: Ethernet4
-        - device: leaf1-linux
-          port: Ethernet4
-    - endpoints:
-        - device: spine1-linux
-          port: Ethernet8
-        - device: leaf2-linux
-          port: Ethernet0
-    - endpoints:
-        - device: spine1-linux
-          port: Ethernet12
-        - device: leaf2-linux
-          port: Ethernet4
-```
 
 To change the topology at runtime, edit the mounted file (or use the PUT
 API) and the reconciler will apply changes within ~5 seconds.
 
 ## Generating New Topologies with tgen
 
-The `tgen` tool reads a topology YAML file and generates a complete
-`docker-compose.yml` + supporting scripts for a new lab:
+The `tgen` tool generates a complete `docker-compose.yml` + `topology.yml`
++ supporting scripts from command-line flags — no input file needed:
 
 ```bash
 cd tgen
-go build -o tgen .
-./tgen -o ../example/ sample.yml
+go run . -s 1 -l 4 -o ../mylab/     # 1 spine, 4 leaves
+go run . -s 2 -l 6 -o ../dc/        # 2 spines, 6 leaves
+go run . -m -n 5 -o ../mesh/        # Full mesh of 5 nodes
+go run . -r -n 8 -o ../ring/        # Ring of 8 nodes
 ```
+
+> **Note:** The output directory must be a direct child of the repo root
+> (e.g., `../mylab/`) because the generated compose file uses
+> `context: ..` to reference `Dockerfile.webmesh` and `Dockerfile.debian`.
+
+See [`tgen/README.md`](tgen/README.md) for full documentation.
 
 > **Note:** The output directory must be a direct child of the repo root
 > (e.g., `example/`, `mylab/`) because the generated compose file uses

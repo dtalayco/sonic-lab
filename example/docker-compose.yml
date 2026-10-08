@@ -40,7 +40,7 @@ services:
     ports:
       - "8092:9090"
     volumes:
-      - ./sample.yml:/etc/webmesh/topology.yml:ro
+      - ./topology.yml:/etc/webmesh/topology.yml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./tmp/vnet_ready:/tmp/vnet_ready:rw
     healthcheck:
@@ -56,17 +56,17 @@ services:
   spine1-linux:
     <<: *debian-common
     container_name: spine1-linux
-    command: ["bash", "/init_linux.sh", "spine1-linux", "32"]
+    command: ["bash", "/init_linux.sh", "spine1-linux"]
 
   leaf1-linux:
     <<: *debian-common
     container_name: leaf1-linux
-    command: ["bash", "/init_linux.sh", "leaf1-linux", "32"]
+    command: ["bash", "/init_linux.sh", "leaf1-linux"]
 
   leaf2-linux:
     <<: *debian-common
     container_name: leaf2-linux
-    command: ["bash", "/init_linux.sh", "leaf2-linux", "32"]
+    command: ["bash", "/init_linux.sh", "leaf2-linux"]
 
   ###########################
   # SONiC VS containers      #
