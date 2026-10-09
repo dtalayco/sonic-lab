@@ -89,6 +89,15 @@ func (w *Writer) writeCompose() error {
 	sb.WriteString("    - ./tmp/vnet_ready:/tmp/vnet_ready:rw\n")
 	sb.WriteString("  shm_size: \"2gb\"\n\n")
 
+	sb.WriteString("x-host-common: &host-common\n")
+	sb.WriteString("  build:\n")
+	sb.WriteString("    context: ..\n")
+	sb.WriteString("    dockerfile: Dockerfile.host\n")
+	sb.WriteString("  image: sonic-lab/host:latest\n")
+	sb.WriteString("  platform: linux/amd64\n")
+	sb.WriteString("  privileged: true\n")
+	sb.WriteString("  tty: true\n\n")
+
 	sb.WriteString("services:\n")
 
 	// Webmesh
@@ -155,6 +164,22 @@ func (w *Writer) writeCompose() error {
 		}
 	}
 
+	// Host containers
+	if len(w.Topology.Hosts) > 0 {
+		sb.WriteString("\n  ########################\n")
+		sb.WriteString("  # Simulated host containers #\n")
+		sb.WriteString("  ########################\n\n")
+
+		for i, h := range w.Topology.Hosts {
+			sb.WriteString(fmt.Sprintf("  %s:\n", h.Name))
+			sb.WriteString("    <<: *host-common\n")
+			sb.WriteString(fmt.Sprintf("    container_name: %s\n", h.Name))
+			if i < len(w.Topology.Hosts)-1 {
+				sb.WriteString("\n")
+			}
+		}
+	}
+
 	return os.WriteFile(filepath.Join(w.OutputDir, "docker-compose.yml"), []byte(sb.String()), 0o644)
 }
 
@@ -165,6 +190,7 @@ type topologyYAML struct {
 	Topology struct {
 		Name     string                `yaml:"name"`
 		Switches map[string]switchYAML `yaml:"switches"`
+		Hosts    map[string]hostYAML   `yaml:"hosts,omitempty"`
 		Links    []linkYAML            `yaml:"links"`
 	} `yaml:"topology"`
 }
@@ -172,6 +198,10 @@ type topologyYAML struct {
 type switchYAML struct {
 	Role  string                 `yaml:"role"`
 	ASN   int                    `yaml:"asn"`
+	Ports map[string]interface{} `yaml:"ports"`
+}
+
+type hostYAML struct {
 	Ports map[string]interface{} `yaml:"ports"`
 }
 
@@ -199,6 +229,17 @@ func (w *Writer) writeTopologyYAML() error {
 			sy.Ports[p] = map[string]interface{}{}
 		}
 		ty.Topology.Switches[sw.Name] = sy
+	}
+
+	if len(w.Topology.Hosts) > 0 {
+		ty.Topology.Hosts = make(map[string]hostYAML, len(w.Topology.Hosts))
+		for _, h := range w.Topology.Hosts {
+			hyp := make(map[string]interface{}, len(h.Ports))
+			for _, p := range h.Ports {
+				hyp[p] = map[string]interface{}{}
+			}
+			ty.Topology.Hosts[h.Name] = hostYAML{Ports: hyp}
+		}
 	}
 
 	for _, l := range w.Topology.Links {

@@ -301,3 +301,195 @@ func TestPortName(t *testing.T) {
 		}
 	}
 }
+func TestHosts_Basic(t *testing.T) {
+	// 2 spines, 1 leaf, 1 host per switch (3 total hosts)
+	tt := mustGenerate(t, Options{Spines: 2, Leaves: 1, HostsPerSwitch: 1})
+
+	if len(tt.Hosts) != 3 {
+		t.Fatalf("Hosts = %d, want 3", len(tt.Hosts))
+	}
+	// 2 switch-to-switch links (2 spines × 1 leaf) + 3 host links = 5 total
+	if len(tt.Links) != 5 {
+		t.Fatalf("Links = %d, want 5", len(tt.Links))
+	}
+
+	// Each host has 1 port
+	for _, h := range tt.Hosts {
+		if len(h.Ports) != 1 {
+			t.Errorf("%s ports = %d, want 1", h.Name, len(h.Ports))
+		}
+		if h.Ports[0] != "Ethernet0" {
+			t.Errorf("%s port = %q, want Ethernet0", h.Name, h.Ports[0])
+		}
+	}
+}
+
+func TestHosts_Naming(t *testing.T) {
+	tt := mustGenerate(t, Options{Spines: 2, Leaves: 1, HostsPerSwitch: 2})
+
+	// Total hosts = 2 per switch * 3 switches = 6
+	if len(tt.Hosts) != 6 {
+		t.Fatalf("Hosts = %d, want 6", len(tt.Hosts))
+	}
+	wantNames := []string{"host1", "host2", "host3", "host4", "host5", "host6"}
+	for i, want := range wantNames {
+		if tt.Hosts[i].Name != want {
+			t.Errorf("Hosts[%d].Name = %q, want %q", i, tt.Hosts[i].Name, want)
+		}
+	}
+}
+
+func TestHosts_MultiPort(t *testing.T) {
+	// 2 spines, 1 leaf, 2 hosts per switch, 2 ports per host
+	tt := mustGenerate(t, Options{Spines: 2, Leaves: 1, HostsPerSwitch: 2, PortsPerHost: 2})
+
+	// Total hosts = 2 * 3 = 6
+	if len(tt.Hosts) != 6 {
+		t.Fatalf("Hosts = %d, want 6", len(tt.Hosts))
+	}
+	// Each host has 2 ports
+	for _, h := range tt.Hosts {
+		if len(h.Ports) != 2 {
+			t.Errorf("%s ports = %d, want 2", h.Name, len(h.Ports))
+		}
+		if h.Ports[0] != "Ethernet0" || h.Ports[1] != "Ethernet4" {
+			t.Errorf("%s ports = %v, want [Ethernet0 Ethernet4]", h.Name, h.Ports)
+		}
+	}
+	// Links: 2 switch-switch (2 spines × 1 leaf) + 6 hosts × 2 ports = 14
+	if len(tt.Links) != 14 {
+		t.Fatalf("Links = %d, want 14", len(tt.Links))
+	}
+}
+
+func TestHosts_PortMapping(t *testing.T) {
+	// 2 spines, 1 leaf, 1 host per switch
+	// Switch order: spine1(0), spine2(1), leaf1(2)
+	// host0: home=spine1(0), port0→spine1
+	// host1: home=spine2(1), port0→spine2
+	// host2: home=leaf1(2), port0→leaf1
+	tt := mustGenerate(t, Options{Spines: 2, Leaves: 1, HostsPerSwitch: 1})
+
+	// Find host links (links where one endpoint is a host)
+	var hostLinks []Link
+	for _, l := range tt.Links {
+		if isHostEndpoint(l.A) || isHostEndpoint(l.B) {
+			hostLinks = append(hostLinks, l)
+		}
+	}
+	if len(hostLinks) != 3 {
+		t.Fatalf("host links = %d, want 3", len(hostLinks))
+	}
+
+	// host0 → spine1-linux
+	if hostLinks[0].B.Device != "host1" {
+		t.Errorf("hostLinks[0].B.Device = %q, want host1", hostLinks[0].B.Device)
+	}
+	if hostLinks[0].A.Device != "spine1-linux" {
+		t.Errorf("hostLinks[0].A.Device = %q, want spine1-linux", hostLinks[0].A.Device)
+	}
+
+	// host1 → spine2-linux
+	if hostLinks[1].B.Device != "host2" {
+		t.Errorf("hostLinks[1].B.Device = %q, want host2", hostLinks[1].B.Device)
+	}
+	if hostLinks[1].A.Device != "spine2-linux" {
+		t.Errorf("hostLinks[1].A.Device = %q, want spine2-linux", hostLinks[1].A.Device)
+	}
+
+	// host2 → leaf1-linux
+	if hostLinks[2].B.Device != "host3" {
+		t.Errorf("hostLinks[2].B.Device = %q, want host3", hostLinks[2].B.Device)
+	}
+	if hostLinks[2].A.Device != "leaf1-linux" {
+		t.Errorf("hostLinks[2].A.Device = %q, want leaf1-linux", hostLinks[2].A.Device)
+	}
+}
+
+func TestHosts_Redundancy(t *testing.T) {
+	// 2 spines, 2 leaves, 1 host per switch, 2 ports per host
+	// host0: home=spine1(0), port0→spine1(0), port1→spine2(1)
+	tt := mustGenerate(t, Options{Spines: 2, Leaves: 2, HostsPerSwitch: 1, PortsPerHost: 2})
+
+	// 4 switches * 1 host * 2 ports = 8 host links
+	var hostLinks []Link
+	for _, l := range tt.Links {
+		if isHostEndpoint(l.A) || isHostEndpoint(l.B) {
+			hostLinks = append(hostLinks, l)
+		}
+	}
+	if len(hostLinks) != 8 {
+		t.Fatalf("host links = %d, want 8", len(hostLinks))
+	}
+
+	// Verify host1 (index 0, home=spine1) connects to spine1 and spine2
+	var h1Links []Link
+	for _, l := range hostLinks {
+		if l.A.Device == "host1" || l.B.Device == "host1" {
+			h1Links = append(h1Links, l)
+		}
+	}
+	if len(h1Links) != 2 {
+		t.Fatalf("host1 links = %d, want 2", len(h1Links))
+	}
+	seen := map[string]bool{}
+	for _, l := range h1Links {
+		other := l.A.Device
+		if l.A.Device == "host1" {
+			other = l.B.Device
+		}
+		seen[other] = true
+	}
+	if !seen["spine1-linux"] {
+		t.Error("host1 should connect to spine1-linux")
+	}
+	if !seen["spine2-linux"] {
+		t.Error("host1 should connect to spine2-linux")
+	}
+}
+
+func TestHosts_NoHosts(t *testing.T) {
+	tt := mustGenerate(t, Options{Spines: 2, Leaves: 2})
+	if len(tt.Hosts) != 0 {
+		t.Errorf("Hosts = %d, want 0", len(tt.Hosts))
+	}
+}
+
+func TestHosts_SwitchPortAllocation(t *testing.T) {
+	// 1 spine, 2 leaves, 1 host per switch
+	// spine1 has 2 switch ports (for 2 leaves) + 1 host port = 3 total
+	// leaf1 has 1 switch port (for 1 spine) + 1 host port = 2 total
+	// leaf2 has 1 switch port (for 1 spine) + 1 host port = 2 total
+	tt := mustGenerate(t, Options{Spines: 1, Leaves: 2, HostsPerSwitch: 1})
+
+	for _, sw := range tt.Switches {
+		switch sw.Name {
+		case "spine1":
+			if len(sw.Ports) != 3 {
+				t.Errorf("spine1 ports = %d, want 3 (2 switch + 1 host)", len(sw.Ports))
+			}
+			if sw.Ports[2] != "Ethernet8" {
+				t.Errorf("spine1.Ports[2] = %q, want Ethernet8", sw.Ports[2])
+			}
+		case "leaf1":
+			if len(sw.Ports) != 2 {
+				t.Errorf("leaf1 ports = %d, want 2 (1 switch + 1 host)", len(sw.Ports))
+			}
+			if sw.Ports[1] != "Ethernet4" {
+				t.Errorf("leaf1.Ports[1] = %q, want Ethernet4", sw.Ports[1])
+			}
+		case "leaf2":
+			if len(sw.Ports) != 2 {
+				t.Errorf("leaf2 ports = %d, want 2 (1 switch + 1 host)", len(sw.Ports))
+			}
+			if sw.Ports[1] != "Ethernet4" {
+				t.Errorf("leaf2.Ports[1] = %q, want Ethernet4", sw.Ports[1])
+			}
+		}
+	}
+}
+
+// isHostEndpoint returns true if the endpoint's device name starts with "host".
+func isHostEndpoint(e Endpoint) bool {
+	return len(e.Device) > 4 && e.Device[:4] == "host"
+}

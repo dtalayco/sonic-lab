@@ -10,6 +10,9 @@ license that can be found in the LICENSE file.
 //   - Spine-leaf: S spines, L leaves, every leaf uplinks to every spine
 //   - Full mesh: N nodes, every node connected to every other node
 //   - Ring: N nodes connected in a circular loop
+//
+// Hosts can be attached to any topology via the HostsPerSwitch and
+// PortsPerHost options.
 package topo
 
 import (
@@ -20,6 +23,7 @@ import (
 type Topology struct {
 	Name     string
 	Switches []Switch
+	Hosts    []Host
 	Links    []Link
 }
 
@@ -28,6 +32,12 @@ type Switch struct {
 	Name  string
 	Role  string // "spine", "leaf", or "node"
 	ASN   int
+	Ports []string
+}
+
+// Host represents a simulated host container attached to one or more switches.
+type Host struct {
+	Name  string
 	Ports []string
 }
 
@@ -45,11 +55,13 @@ type Endpoint struct {
 
 // Options controls topology generation.
 type Options struct {
-	Spines int // -s: number of spine switches
-	Leaves int // -l: number of leaf switches
-	Mesh   bool // -m: generate full mesh topology
-	Ring   bool // -r: generate ring topology
-	Nodes  int  // -n: number of nodes (for mesh/ring)
+	Spines          int  // -s: number of spine switches
+	Leaves          int  // -l: number of leaf switches
+	Mesh            bool // -m: generate full mesh topology
+	Ring            bool // -r: generate ring topology
+	Nodes           int  // -n: number of nodes (for mesh/ring)
+	HostsPerSwitch  int  // -h: number of hosts attached to each switch
+	PortsPerHost    int  // -p: number of ports per host (default 1)
 }
 
 // MaxPorts is the maximum number of ports available per switch
@@ -64,6 +76,8 @@ func portName(index int) string {
 
 // Generate builds a Topology from the given Options.
 func Generate(opts Options) (*Topology, error) {
+	var t *Topology
+
 	switch {
 	case opts.Mesh:
 		if opts.Nodes < 2 {
@@ -73,13 +87,13 @@ func Generate(opts Options) (*Topology, error) {
 			return nil, fmt.Errorf("mesh of %d nodes requires %d ports per node, exceeds max %d",
 				opts.Nodes, opts.Nodes-1, MaxPorts)
 		}
-		return mesh(opts.Nodes), nil
+		t = mesh(opts.Nodes)
 
 	case opts.Ring:
 		if opts.Nodes < 3 {
 			return nil, fmt.Errorf("ring requires at least 3 nodes (got %d)", opts.Nodes)
 		}
-		return ring(opts.Nodes), nil
+		t = ring(opts.Nodes)
 
 	default:
 		if opts.Spines < 1 {
@@ -94,8 +108,74 @@ func Generate(opts Options) (*Topology, error) {
 		if opts.Leaves > MaxPorts {
 			return nil, fmt.Errorf("each spine would need %d ports, exceeds max %d", opts.Leaves, MaxPorts)
 		}
-		return spineLeaf(opts.Spines, opts.Leaves), nil
+		t = spineLeaf(opts.Spines, opts.Leaves)
 	}
+
+	// Add hosts if requested
+	if opts.HostsPerSwitch > 0 {
+		if err := addHosts(t, opts.HostsPerSwitch, opts.PortsPerHost); err != nil {
+			return nil, err
+		}
+	}
+
+	return t, nil
+}
+
+// addHosts appends host containers and host-to-switch links to the topology.
+// Each switch gets hostsPerSwitch hosts. Each host has portsPerHost ports,
+// with port p connecting to switch (homeSwitch + p) % totalSwitches.
+func addHosts(t *Topology, hostsPerSwitch, portsPerHost int) error {
+	if portsPerHost < 1 {
+		portsPerHost = 1
+	}
+
+	totalSwitches := len(t.Switches)
+	totalHosts := hostsPerSwitch * totalSwitches
+
+	// Create host entries
+	for i := 0; i < totalHosts; i++ {
+		h := Host{Name: fmt.Sprintf("host%d", i+1)}
+		for p := 0; p < portsPerHost; p++ {
+			h.Ports = append(h.Ports, portName(p))
+		}
+		t.Hosts = append(t.Hosts, h)
+	}
+
+	// Track next available port index per switch (starts after switch-to-switch ports)
+	nextPort := make([]int, totalSwitches)
+	for i, sw := range t.Switches {
+		nextPort[i] = len(sw.Ports)
+	}
+
+	// Create host-to-switch links
+	for i := 0; i < totalHosts; i++ {
+		homeSwitch := i / hostsPerSwitch
+		for p := 0; p < portsPerHost; p++ {
+			targetSwitch := (homeSwitch + p) % totalSwitches
+
+			idx := nextPort[targetSwitch]
+			if idx >= MaxPorts {
+				return fmt.Errorf("%s would need %d ports (host connections), exceeds max %d",
+					t.Switches[targetSwitch].Name, idx+1, MaxPorts)
+			}
+			nextPort[targetSwitch]++
+
+			t.Switches[targetSwitch].Ports = append(t.Switches[targetSwitch].Ports, portName(idx))
+
+			t.Links = append(t.Links, Link{
+				A: Endpoint{
+					Device: fmt.Sprintf("%s-linux", t.Switches[targetSwitch].Name),
+					Port:   portName(idx),
+				},
+				B: Endpoint{
+					Device: fmt.Sprintf("host%d", i+1),
+					Port:   portName(p),
+				},
+			})
+		}
+	}
+
+	return nil
 }
 
 // spineLeaf generates a classic spine-leaf topology where every leaf

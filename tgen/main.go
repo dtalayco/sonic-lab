@@ -39,6 +39,8 @@ func main() {
 	mesh := fs.Bool("m", false, "generate full mesh topology")
 	ring := fs.Bool("r", false, "generate ring topology")
 	nodes := fs.Int("n", 0, "number of nodes (for -m or -r)")
+	hosts := fs.Int("h", 0, "number of hosts attached to each switch")
+	ports := fs.Int("p", 1, "number of ports per host (each port maps to a different switch)")
 
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), `tgen — SONiC virtual lab topology generator
@@ -53,6 +55,11 @@ Topology modes (pick one):
   -r          Generate ring topology (use with -n)
   -n <int>    Number of nodes (for -m or -r)
 
+Hosts (optional):
+  -h <int>    Number of hosts attached to each switch
+  -p <int>    Number of ports per host (default 1; each port maps to a
+              different switch for redundancy)
+
 Output:
   -o <dir>    Output directory (default ".", must be a direct child of repo root)
 
@@ -61,6 +68,7 @@ Examples:
   tgen -s 2 -l 6 -o ../dc/        # 2 spines, 6 leaves
   tgen -m -n 5 -o ../mesh/        # Full mesh of 5 nodes
   tgen -r -n 8 -o ../ring/        # Ring of 8 nodes
+  tgen -s 2 -l 2 -h 2 -p 2 -o ../lab/  # 2x2 spine-leaf with 2 hosts/switch, 2 ports each
 `)
 	}
 
@@ -68,11 +76,13 @@ Examples:
 
 	// Validate mode selection
 	opts := topo.Options{
-		Spines: *spines,
-		Leaves: *leaves,
-		Mesh:   *mesh,
-		Ring:   *ring,
-		Nodes:  *nodes,
+		Spines:         *spines,
+		Leaves:         *leaves,
+		Mesh:           *mesh,
+		Ring:           *ring,
+		Nodes:          *nodes,
+		HostsPerSwitch: *hosts,
+		PortsPerHost:   *ports,
 	}
 
 	if opts.Mesh && opts.Ring {
@@ -126,7 +136,12 @@ Examples:
 		log.Fatalf("writing output: %v", err)
 	}
 
-	fmt.Printf("Generated %s topology (%d switches, %d links) → %s\n",
-		t.Name, len(t.Switches), len(t.Links), outDir)
+	if len(t.Hosts) > 0 {
+		fmt.Printf("Generated %s topology (%d switches, %d hosts, %d links) → %s\n",
+			t.Name, len(t.Switches), len(t.Hosts), len(t.Links), outDir)
+	} else {
+		fmt.Printf("Generated %s topology (%d switches, %d links) → %s\n",
+			t.Name, len(t.Switches), len(t.Links), outDir)
+	}
 	fmt.Println("Run ./start.sh in the output directory to launch the lab.")
 }

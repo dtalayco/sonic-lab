@@ -19,6 +19,8 @@ tgen [flags]
 | `-m` | Generate full mesh topology |
 | `-r` | Generate ring topology |
 | `-n <int>` | Number of nodes (for `-m` or `-r`) |
+| `-h <int>` | Number of hosts attached to each switch |
+| `-p <int>` | Number of ports per host (default 1; each port maps to a different switch) |
 | `-o <dir>` | Output directory (default `.`, must be a direct child of repo root) |
 
 ### Examples
@@ -35,7 +37,21 @@ go run . -m -n 5 -o ../mesh-lab/
 
 # Ring: 8 nodes in a circular loop
 go run . -r -n 8 -o ../ring-lab/
+
+# Spine-leaf with hosts: 2 spines, 2 leaves, 2 hosts per switch, 2 ports per host
+go run . -s 2 -l 2 -h 2 -p 2 -o ../lab-with-hosts/
 ```
+
+### Hosts
+
+The `-h` flag adds simulated host containers to the topology. Each switch
+gets `-h` hosts, and each host has `-p` ports (default 1). Port `p` of a
+host connects to switch `(homeSwitch + p) % totalSwitches`, giving
+natural multi-homed redundancy.
+
+Hosts are built from `Dockerfile.host` (a small Debian image with
+`iproute2`, `tcpdump`, `bridge-utils`, `ifenslave`, `ethtool`, and
+`iputils-ping`).
 
 ### How It Works
 
