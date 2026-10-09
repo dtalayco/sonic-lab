@@ -109,7 +109,7 @@ services:
       - ./tmp/vnet_ready:/tmp/vnet_ready:ro
       - /var/run/redis-vs/spine1:/var/run/redis
       - ./sonic_entry.sh:/sonic_entry.sh:ro
-      - ./frr/spine1.conf:/etc/frr/frr.conf:ro
+      - ./frr/spine1.conf:/tmp/frr.conf:ro
     entrypoint: ["/bin/bash", "/sonic_entry.sh", "spine1-linux", "fd00:0:0:fde8::1/128"]
 
   spine2:
@@ -125,7 +125,7 @@ services:
       - ./tmp/vnet_ready:/tmp/vnet_ready:ro
       - /var/run/redis-vs/spine2:/var/run/redis
       - ./sonic_entry.sh:/sonic_entry.sh:ro
-      - ./frr/spine2.conf:/etc/frr/frr.conf:ro
+      - ./frr/spine2.conf:/tmp/frr.conf:ro
     entrypoint: ["/bin/bash", "/sonic_entry.sh", "spine2-linux", "fd00:0:0:fde9::1/128"]
 
   leaf1:
@@ -141,7 +141,7 @@ services:
       - ./tmp/vnet_ready:/tmp/vnet_ready:ro
       - /var/run/redis-vs/leaf1:/var/run/redis
       - ./sonic_entry.sh:/sonic_entry.sh:ro
-      - ./frr/leaf1.conf:/etc/frr/frr.conf:ro
+      - ./frr/leaf1.conf:/tmp/frr.conf:ro
     entrypoint: ["/bin/bash", "/sonic_entry.sh", "leaf1-linux", "fd00:0:0:fe4c::1/128"]
 
   leaf2:
@@ -157,7 +157,7 @@ services:
       - ./tmp/vnet_ready:/tmp/vnet_ready:ro
       - /var/run/redis-vs/leaf2:/var/run/redis
       - ./sonic_entry.sh:/sonic_entry.sh:ro
-      - ./frr/leaf2.conf:/etc/frr/frr.conf:ro
+      - ./frr/leaf2.conf:/tmp/frr.conf:ro
     entrypoint: ["/bin/bash", "/sonic_entry.sh", "leaf2-linux", "fd00:0:0:fe4d::1/128"]
 
   leaf3:
@@ -173,7 +173,7 @@ services:
       - ./tmp/vnet_ready:/tmp/vnet_ready:ro
       - /var/run/redis-vs/leaf3:/var/run/redis
       - ./sonic_entry.sh:/sonic_entry.sh:ro
-      - ./frr/leaf3.conf:/etc/frr/frr.conf:ro
+      - ./frr/leaf3.conf:/tmp/frr.conf:ro
     entrypoint: ["/bin/bash", "/sonic_entry.sh", "leaf3-linux", "fd00:0:0:fe4e::1/128"]
 
   leaf4:
@@ -189,5 +189,5 @@ services:
       - ./tmp/vnet_ready:/tmp/vnet_ready:ro
       - /var/run/redis-vs/leaf4:/var/run/redis
       - ./sonic_entry.sh:/sonic_entry.sh:ro
-      - ./frr/leaf4.conf:/etc/frr/frr.conf:ro
+      - ./frr/leaf4.conf:/tmp/frr.conf:ro
     entrypoint: ["/bin/bash", "/sonic_entry.sh", "leaf4-linux", "fd00:0:0:fe4f::1/128"]

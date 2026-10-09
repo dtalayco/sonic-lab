@@ -161,7 +161,7 @@ func (w *Writer) writeCompose() error {
 		sb.WriteString("      - ./tmp/vnet_ready:/tmp/vnet_ready:ro\n")
 		sb.WriteString(fmt.Sprintf("      - /var/run/redis-vs/%s:/var/run/redis\n", name))
 		sb.WriteString("      - ./sonic_entry.sh:/sonic_entry.sh:ro\n")
-		sb.WriteString(fmt.Sprintf("      - ./frr/%s.conf:/etc/frr/frr.conf:ro\n", name))
+		sb.WriteString(fmt.Sprintf("      - ./frr/%s.conf:/tmp/frr.conf:ro\n", name))
 		sb.WriteString(fmt.Sprintf("    entrypoint: [\"/bin/bash\", \"/sonic_entry.sh\", \"%s-linux\", \"%s\"]\n", name, sw.VtepAddr))
 		if i < len(w.Topology.Switches)-1 {
 			sb.WriteString("\n")
@@ -307,7 +307,28 @@ if [ -n "$VTEP" ]; then
         sleep 2
     done
 
-    # SONiC's start.sh does not start bgpd — start it explicitly.
+    # Create Loopback0 (dummy type) with the VTEP address.
+    # NOTE: SONiC's ip binary does not support "type loopback";
+    # "type dummy" is the correct type for a VTEP interface.
+    ip link add Loopback0 type dummy 2>/dev/null || true
+    ip addr replace "$VTEP" dev Loopback0
+    ip link set Loopback0 up
+    echo "Loopback0 created with VTEP address $VTEP"
+
+    # Bring up all Ethernet* interfaces BEFORE starting bgpd.
+    # Zebra must see them as UP before bgpd connects, otherwise
+    # bgpd crashes when reading the config with unnumbered neighbors.
+    for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep '^Ethernet'); do
+        ip link set "$iface" up 2>/dev/null || true
+    done
+    echo "Brought up Ethernet interfaces"
+
+    # Give zebra time to process the interface state changes via netlink
+    # before bgpd connects and requests the interface list.
+    sleep 3
+
+    # SONiC's start.sh does not start bgpd — start it explicitly now
+    # that all interfaces are up and registered with zebra.
     supervisorctl start bgpd 2>/dev/null || true
     echo "Waiting for bgpd to start..."
     for i in $(seq 1 30); do
@@ -318,26 +339,10 @@ if [ -n "$VTEP" ]; then
         sleep 2
     done
 
-    # Create Loopback0 (dummy type) with the VTEP address.
-    # NOTE: SONiC's ip binary does not support "type loopback";
-    # "type dummy" is the correct type for a VTEP interface.
-    ip link add Loopback0 type dummy
-    ip addr replace "$VTEP" dev Loopback0
-    ip link set Loopback0 up
-    echo "Loopback0 created with VTEP address $VTEP"
-
-    # Bring up all Ethernet* interfaces to ensure they have link-local
-    # IPv6 addresses. FRR's bgpd will crash if a BGP unnumbered
-    # neighbor references an interface that doesn't exist.
-    for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep '^Ethernet'); do
-        ip link set "$iface" up 2>/dev/null || true
-    done
-    echo "Brought up Ethernet interfaces"
-
     # Load FRR config explicitly. Non-fatal: if it fails the container
     # should stay up so we can debug.
     echo "Loading FRR configuration..."
-    vtysh -f /etc/frr/frr.conf || echo "WARNING: vtysh -f returned non-zero"
+    vtysh -f /tmp/frr.conf || echo "WARNING: vtysh -f returned non-zero"
     echo "FRR configuration loaded"
 fi
 
@@ -425,22 +430,28 @@ func (w *Writer) generateFRRConfig(sw topo.Switch) string {
 	// BGP router
 	sb.WriteString(fmt.Sprintf("router bgp %d\n", sw.ASN))
 	sb.WriteString(" !\n")
+	sb.WriteString(" no bgp ebgp-requires-policy\n")
+	sb.WriteString(" no bgp default ipv4-unicast\n")
+	sb.WriteString(" bgp disable-ebgp-connected-route-check\n")
+	sb.WriteString(" bgp bestpath as-path multipath-relax\n")
 
-	// BGP unnumbered neighbor definitions
+	// Peer-group for unnumbered eBGP transit
+	sb.WriteString(" neighbor TRANSIT peer-group\n")
+	sb.WriteString(" neighbor TRANSIT remote-as external\n")
+	sb.WriteString(" neighbor TRANSIT ebgp-multihop\n")
+
+	// Unnumbered neighbors via interface keyword + peer-group
 	for _, nb := range neighbors {
 		kernel := kernelPortName(nb.localPort)
-		sb.WriteString(fmt.Sprintf(" neighbor %s remote-as %d\n", kernel, nb.peerASN))
-		sb.WriteString(fmt.Sprintf(" neighbor %s unnumbered\n", kernel))
+		sb.WriteString(fmt.Sprintf(" neighbor %s interface peer-group TRANSIT\n", kernel))
 	}
 	sb.WriteString(" !\n")
 
 	// IPv6 address family
 	sb.WriteString(" address-family ipv6\n")
-	for _, nb := range neighbors {
-		kernel := kernelPortName(nb.localPort)
-		sb.WriteString(fmt.Sprintf("  neighbor %s activate\n", kernel))
-	}
 	sb.WriteString(fmt.Sprintf("  network %s\n", sw.VtepAddr))
+	sb.WriteString("  neighbor TRANSIT activate\n")
+	sb.WriteString("  neighbor TRANSIT next-hop-self\n")
 	sb.WriteString(" exit-address-family\n")
 	sb.WriteString("!\n")
 

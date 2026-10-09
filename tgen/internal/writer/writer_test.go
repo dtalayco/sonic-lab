@@ -69,26 +69,45 @@ func TestGenerateFRRConfig_SpineLeaf(t *testing.T) {
 		t.Errorf("spine1 config missing VTEP address")
 	}
 
-	// Should have BGP unnumbered neighbor for leaf1 (Ethernet0) and leaf2 (Ethernet4)
-	if !strings.Contains(cfg, "neighbor Ethernet0 remote-as 65100") {
-		t.Errorf("spine1 config missing 'neighbor Ethernet0 remote-as 65100'")
+	// Should have peer-group definition
+	if !strings.Contains(cfg, "neighbor TRANSIT peer-group") {
+		t.Errorf("spine1 config missing 'neighbor TRANSIT peer-group'")
 	}
-	if !strings.Contains(cfg, "neighbor Ethernet0 unnumbered") {
-		t.Errorf("spine1 config missing 'neighbor Ethernet0 unnumbered'")
+	if !strings.Contains(cfg, "neighbor TRANSIT remote-as external") {
+		t.Errorf("spine1 config missing 'neighbor TRANSIT remote-as external'")
 	}
-	if !strings.Contains(cfg, "neighbor Ethernet4 remote-as 65101") {
-		t.Errorf("spine1 config missing 'neighbor Ethernet4 remote-as 65101'")
-	}
-	if !strings.Contains(cfg, "neighbor Ethernet4 unnumbered") {
-		t.Errorf("spine1 config missing 'neighbor Ethernet4 unnumbered'")
+	if !strings.Contains(cfg, "neighbor TRANSIT ebgp-multihop") {
+		t.Errorf("spine1 config missing 'neighbor TRANSIT ebgp-multihop'")
 	}
 
-	// Should have IPv6 address family with activate and network
+	// Should have unnumbered neighbors via interface keyword
+	if !strings.Contains(cfg, "neighbor Ethernet0 interface peer-group TRANSIT") {
+		t.Errorf("spine1 config missing 'neighbor Ethernet0 interface peer-group TRANSIT'")
+	}
+	if !strings.Contains(cfg, "neighbor Ethernet4 interface peer-group TRANSIT") {
+		t.Errorf("spine1 config missing 'neighbor Ethernet4 interface peer-group TRANSIT'")
+	}
+
+	// Should have BGP tuning statements
+	if !strings.Contains(cfg, "no bgp ebgp-requires-policy") {
+		t.Errorf("spine1 config missing 'no bgp ebgp-requires-policy'")
+	}
+	if !strings.Contains(cfg, "bgp disable-ebgp-connected-route-check") {
+		t.Errorf("spine1 config missing 'bgp disable-ebgp-connected-route-check'")
+	}
+	if !strings.Contains(cfg, "bgp bestpath as-path multipath-relax") {
+		t.Errorf("spine1 config missing 'bgp bestpath as-path multipath-relax'")
+	}
+
+	// Should have IPv6 address family with activate and next-hop-self
 	if !strings.Contains(cfg, "address-family ipv6") {
 		t.Errorf("spine1 config missing 'address-family ipv6'")
 	}
-	if !strings.Contains(cfg, "neighbor Ethernet0 activate") {
-		t.Errorf("spine1 config missing 'neighbor Ethernet0 activate'")
+	if !strings.Contains(cfg, "neighbor TRANSIT activate") {
+		t.Errorf("spine1 config missing 'neighbor TRANSIT activate'")
+	}
+	if !strings.Contains(cfg, "neighbor TRANSIT next-hop-self") {
+		t.Errorf("spine1 config missing 'neighbor TRANSIT next-hop-self'")
 	}
 	if !strings.Contains(cfg, "network fd00:0:0:fde8::1/128") {
 		t.Errorf("spine1 config missing network statement")
@@ -112,11 +131,11 @@ func TestGenerateFRRConfig_Leaf(t *testing.T) {
 	cfg := w.generateFRRConfig(*leaf)
 
 	// Leaf1 connects to spine1 (Ethernet0) and spine2 (Ethernet4)
-	if !strings.Contains(cfg, "neighbor Ethernet0 remote-as 65000") {
-		t.Errorf("leaf1 config missing 'neighbor Ethernet0 remote-as 65000'")
+	if !strings.Contains(cfg, "neighbor Ethernet0 interface peer-group TRANSIT") {
+		t.Errorf("leaf1 config missing 'neighbor Ethernet0 interface peer-group TRANSIT'")
 	}
-	if !strings.Contains(cfg, "neighbor Ethernet4 remote-as 65001") {
-		t.Errorf("leaf1 config missing 'neighbor Ethernet4 remote-as 65001'")
+	if !strings.Contains(cfg, "neighbor Ethernet4 interface peer-group TRANSIT") {
+		t.Errorf("leaf1 config missing 'neighbor Ethernet4 interface peer-group TRANSIT'")
 	}
 
 	// Should have correct VTEP address for leaf1 (ASN 65100 = 0xFE4C)
@@ -138,11 +157,11 @@ func TestGenerateFRRConfig_Mesh(t *testing.T) {
 	}
 	cfg := w.generateFRRConfig(*node1)
 
-	if !strings.Contains(cfg, "neighbor Ethernet0 remote-as 65001") {
-		t.Errorf("node1 config missing 'neighbor Ethernet0 remote-as 65001' (node2)")
+	if !strings.Contains(cfg, "neighbor Ethernet0 interface peer-group TRANSIT") {
+		t.Errorf("node1 config missing 'neighbor Ethernet0 interface peer-group TRANSIT' (node2)")
 	}
-	if !strings.Contains(cfg, "neighbor Ethernet4 remote-as 65002") {
-		t.Errorf("node1 config missing 'neighbor Ethernet4 remote-as 65002' (node3)")
+	if !strings.Contains(cfg, "neighbor Ethernet4 interface peer-group TRANSIT") {
+		t.Errorf("node1 config missing 'neighbor Ethernet4 interface peer-group TRANSIT' (node3)")
 	}
 }
 
@@ -164,13 +183,12 @@ func TestGenerateFRRConfig_Ring(t *testing.T) {
 	}
 	cfg := w.generateFRRConfig(*node1)
 
-	// node1:Ethernet0 connects to node3 (from ring wraparound: node3:Ethernet4 → node1:Ethernet0)
-	// node1:Ethernet4 connects to node2 (from node1:Ethernet4 → node2:Ethernet0)
-	if !strings.Contains(cfg, "neighbor Ethernet0 remote-as 65002") {
-		t.Errorf("node1 config missing 'neighbor Ethernet0 remote-as 65002' (node3 via ring wrap)")
+	// node1 should have exactly 2 neighbors (ring topology)
+	if !strings.Contains(cfg, "neighbor Ethernet0 interface peer-group TRANSIT") {
+		t.Errorf("node1 config missing 'neighbor Ethernet0 interface peer-group TRANSIT' (node3 via ring wrap)")
 	}
-	if !strings.Contains(cfg, "neighbor Ethernet4 remote-as 65001") {
-		t.Errorf("node1 config missing 'neighbor Ethernet4 remote-as 65001' (node2)")
+	if !strings.Contains(cfg, "neighbor Ethernet4 interface peer-group TRANSIT") {
+		t.Errorf("node1 config missing 'neighbor Ethernet4 interface peer-group TRANSIT' (node2)")
 	}
 }
 
@@ -190,8 +208,8 @@ func TestGenerateFRRConfig_ExcludesHostLinks(t *testing.T) {
 
 	// spine1 has 2 ports: Ethernet0 (to leaf1) and Ethernet4 (to host1)
 	// The FRR config should only include the leaf1 neighbor (Ethernet0), not the host link (Ethernet4)
-	if !strings.Contains(cfg, "neighbor Ethernet0 remote-as 65100") {
-		t.Errorf("spine1 config missing 'neighbor Ethernet0 remote-as 65100' (leaf1)")
+	if !strings.Contains(cfg, "neighbor Ethernet0 interface peer-group TRANSIT") {
+		t.Errorf("spine1 config missing 'neighbor Ethernet0 interface peer-group TRANSIT' (leaf1)")
 	}
 	if strings.Contains(cfg, "neighbor Ethernet4") {
 		t.Errorf("spine1 config should not include host link on Ethernet4")
