@@ -524,3 +524,222 @@ func TestVtepAddr_SetInTopology(t *testing.T) {
 		}
 	}
 }
+
+func TestSpineLeaf_MultiLink(t *testing.T) {
+	// 2 spines, 4 leaves, 4 links per pair
+	tt := mustGenerate(t, Options{Spines: 2, Leaves: 4, Links: 4})
+
+	if len(tt.Switches) != 6 {
+		t.Fatalf("Switches = %d, want 6", len(tt.Switches))
+	}
+	// Total links: 2 spines × 4 leaves × 4 links = 32
+	if len(tt.Links) != 32 {
+		t.Fatalf("Links = %d, want 32", len(tt.Links))
+	}
+
+	// Each spine has 4 leaves × 4 links = 16 ports
+	for _, sw := range tt.Switches {
+		if sw.Role == "spine" && len(sw.Ports) != 16 {
+			t.Errorf("%s ports = %d, want 16", sw.Name, len(sw.Ports))
+		}
+		// Each leaf has 2 spines × 4 links = 8 ports
+		if sw.Role == "leaf" && len(sw.Ports) != 8 {
+			t.Errorf("%s ports = %d, want 8", sw.Name, len(sw.Ports))
+		}
+	}
+}
+
+func TestSpineLeaf_MultiLink_PortGrouping(t *testing.T) {
+	// 2 spines, 2 leaves, 3 links per pair
+	tt := mustGenerate(t, Options{Spines: 2, Leaves: 2, Links: 3})
+
+	var spine1, leaf1, leaf2 *Switch
+	for i := range tt.Switches {
+		switch tt.Switches[i].Name {
+		case "spine1":
+			spine1 = &tt.Switches[i]
+		case "leaf1":
+			leaf1 = &tt.Switches[i]
+		case "leaf2":
+			leaf2 = &tt.Switches[i]
+		}
+	}
+
+	// spine1: leaf1 uses indices [0,3), leaf2 uses [3,6)
+	wantSpine1 := []string{"Ethernet0", "Ethernet4", "Ethernet8", "Ethernet12", "Ethernet16", "Ethernet20"}
+	if len(spine1.Ports) != 6 {
+		t.Fatalf("spine1 ports = %d, want 6", len(spine1.Ports))
+	}
+	for i, want := range wantSpine1 {
+		if spine1.Ports[i] != want {
+			t.Errorf("spine1.Ports[%d] = %q, want %q", i, spine1.Ports[i], want)
+		}
+	}
+
+	// leaf1: spine1 uses indices [0,3), spine2 uses [3,6)
+	wantLeaf1 := []string{"Ethernet0", "Ethernet4", "Ethernet8", "Ethernet12", "Ethernet16", "Ethernet20"}
+	if len(leaf1.Ports) != 6 {
+		t.Fatalf("leaf1 ports = %d, want 6", len(leaf1.Ports))
+	}
+	for i, want := range wantLeaf1 {
+		if leaf1.Ports[i] != want {
+			t.Errorf("leaf1.Ports[%d] = %q, want %q", i, leaf1.Ports[i], want)
+		}
+	}
+
+	// leaf2: spine1 uses indices [0,3), spine2 uses [3,6)
+	if len(leaf2.Ports) != 6 {
+		t.Fatalf("leaf2 ports = %d, want 6", len(leaf2.Ports))
+	}
+}
+
+func TestSpineLeaf_MultiLink_Endpoints(t *testing.T) {
+	// 1 spine, 2 leaves, 2 links per pair
+	tt := mustGenerate(t, Options{Spines: 1, Leaves: 2, Links: 2})
+
+	// 1 spine × 2 leaves × 2 links = 4 links
+	if len(tt.Links) != 4 {
+		t.Fatalf("Links = %d, want 4", len(tt.Links))
+	}
+
+	// Link 0: spine1:Ethernet0 <-> leaf1:Ethernet0
+	l := tt.Links[0]
+	if l.A.Device != "spine1-linux" || l.A.Port != "Ethernet0" {
+		t.Errorf("link[0].A = %s:%s, want spine1-linux:Ethernet0", l.A.Device, l.A.Port)
+	}
+	if l.B.Device != "leaf1-linux" || l.B.Port != "Ethernet0" {
+		t.Errorf("link[0].B = %s:%s, want leaf1-linux:Ethernet0", l.B.Device, l.B.Port)
+	}
+
+	// Link 1: spine1:Ethernet4 <-> leaf1:Ethernet4
+	l = tt.Links[1]
+	if l.A.Device != "spine1-linux" || l.A.Port != "Ethernet4" {
+		t.Errorf("link[1].A = %s:%s, want spine1-linux:Ethernet4", l.A.Device, l.A.Port)
+	}
+	if l.B.Device != "leaf1-linux" || l.B.Port != "Ethernet4" {
+		t.Errorf("link[1].B = %s:%s, want leaf1-linux:Ethernet4", l.B.Device, l.B.Port)
+	}
+
+	// Link 2: spine1:Ethernet8 <-> leaf2:Ethernet0
+	l = tt.Links[2]
+	if l.A.Device != "spine1-linux" || l.A.Port != "Ethernet8" {
+		t.Errorf("link[2].A = %s:%s, want spine1-linux:Ethernet8", l.A.Device, l.A.Port)
+	}
+	if l.B.Device != "leaf2-linux" || l.B.Port != "Ethernet0" {
+		t.Errorf("link[2].B = %s:%s, want leaf2-linux:Ethernet0", l.B.Device, l.B.Port)
+	}
+
+	// Link 3: spine1:Ethernet12 <-> leaf2:Ethernet4
+	l = tt.Links[3]
+	if l.A.Device != "spine1-linux" || l.A.Port != "Ethernet12" {
+		t.Errorf("link[3].A = %s:%s, want spine1-linux:Ethernet12", l.A.Device, l.A.Port)
+	}
+	if l.B.Device != "leaf2-linux" || l.B.Port != "Ethernet4" {
+		t.Errorf("link[3].B = %s:%s, want leaf2-linux:Ethernet4", l.B.Device, l.B.Port)
+	}
+}
+
+func TestMesh_MultiLink(t *testing.T) {
+	// 3 nodes, 2 links per pair
+	tt := mustGenerate(t, Options{Mesh: true, Nodes: 3, Links: 2})
+
+	if len(tt.Switches) != 3 {
+		t.Fatalf("Switches = %d, want 3", len(tt.Switches))
+	}
+	// C(3,2) × 2 = 6 links
+	if len(tt.Links) != 6 {
+		t.Fatalf("Links = %d, want 6", len(tt.Links))
+	}
+	// Each node: 2 peers × 2 links = 4 ports
+	for _, sw := range tt.Switches {
+		if len(sw.Ports) != 4 {
+			t.Errorf("%s ports = %d, want 4", sw.Name, len(sw.Ports))
+		}
+	}
+}
+
+func TestRing_MultiLink(t *testing.T) {
+	// 4 nodes, 2 links per neighbor
+	tt := mustGenerate(t, Options{Ring: true, Nodes: 4, Links: 2})
+
+	if len(tt.Switches) != 4 {
+		t.Fatalf("Switches = %d, want 4", len(tt.Switches))
+	}
+	// 4 nodes × 2 links per edge = 8 links
+	if len(tt.Links) != 8 {
+		t.Fatalf("Links = %d, want 8", len(tt.Links))
+	}
+	// Each node: 2 neighbors × 2 links = 4 ports
+	for _, sw := range tt.Switches {
+		if len(sw.Ports) != 4 {
+			t.Errorf("%s ports = %d, want 4", sw.Name, len(sw.Ports))
+		}
+	}
+}
+
+func TestRing_MultiLink_Endpoints(t *testing.T) {
+	// 3 nodes, 2 links per neighbor
+	tt := mustGenerate(t, Options{Ring: true, Nodes: 3, Links: 2})
+
+	// 3 edges × 2 links = 6 links
+	if len(tt.Links) != 6 {
+		t.Fatalf("Links = %d, want 6", len(tt.Links))
+	}
+
+	// Edge node1→node2: links at node1 ports [2,4) → node2 ports [0,2)
+	// Link 0: node1:Ethernet8 <-> node2:Ethernet0
+	l := tt.Links[0]
+	if l.A.Device != "node1-linux" || l.A.Port != "Ethernet8" {
+		t.Errorf("link[0].A = %s:%s, want node1-linux:Ethernet8", l.A.Device, l.A.Port)
+	}
+	if l.B.Device != "node2-linux" || l.B.Port != "Ethernet0" {
+		t.Errorf("link[0].B = %s:%s, want node2-linux:Ethernet0", l.B.Device, l.B.Port)
+	}
+	// Link 1: node1:Ethernet12 <-> node2:Ethernet4
+	l = tt.Links[1]
+	if l.A.Device != "node1-linux" || l.A.Port != "Ethernet12" {
+		t.Errorf("link[1].A = %s:%s, want node1-linux:Ethernet12", l.A.Device, l.A.Port)
+	}
+	if l.B.Device != "node2-linux" || l.B.Port != "Ethernet4" {
+		t.Errorf("link[1].B = %s:%s, want node2-linux:Ethernet4", l.B.Device, l.B.Port)
+	}
+
+	// Edge node3→node1 (wraparound): links at node3 ports [2,4) → node1 ports [0,2)
+	// Link 4: node3:Ethernet8 <-> node1:Ethernet0
+	l = tt.Links[4]
+	if l.A.Device != "node3-linux" || l.A.Port != "Ethernet8" {
+		t.Errorf("link[4].A = %s:%s, want node3-linux:Ethernet8", l.A.Device, l.A.Port)
+	}
+	if l.B.Device != "node1-linux" || l.B.Port != "Ethernet0" {
+		t.Errorf("link[4].B = %s:%s, want node1-linux:Ethernet0", l.B.Device, l.B.Port)
+	}
+}
+
+func TestLinks_ExceedsMaxPorts(t *testing.T) {
+	// 2 spines, 15 leaves, 2 links → spine needs 30 ports (ok), but let's push over
+	// 2 spines, 16 leaves, 2 links → spine needs 32 ports (> 30)
+	_, err := Generate(Options{Spines: 2, Leaves: 16, Links: 2})
+	if err == nil {
+		t.Error("expected error: 16 leaves × 2 links = 32 ports > 30 max")
+	}
+
+	// Mesh: 16 nodes, 2 links → 30 ports (ok), 17 nodes, 2 links → 32 ports
+	_, err = Generate(Options{Mesh: true, Nodes: 17, Links: 2})
+	if err == nil {
+		t.Error("expected error: 17 nodes × 2 links - 2 = 32 ports > 30 max")
+	}
+
+	// Ring: 16 links → 32 ports > 30
+	_, err = Generate(Options{Ring: true, Nodes: 3, Links: 16})
+	if err == nil {
+		t.Error("expected error: ring with 16 links needs 32 ports > 30 max")
+	}
+}
+
+func TestLinks_DefaultToOne(t *testing.T) {
+	// Links: 0 should be treated as 1
+	tt := mustGenerate(t, Options{Spines: 2, Leaves: 2, Links: 0})
+	if len(tt.Links) != 4 {
+		t.Fatalf("Links = %d, want 4 (default 1 per pair)", len(tt.Links))
+	}
+}

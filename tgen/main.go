@@ -12,6 +12,9 @@ license that can be found in the LICENSE file.
 //	# Spine-leaf: 2 spines, 4 leaves
 //	tgen -s 2 -l 4 -o ../mylab/
 //
+//	# Spine-leaf with ECMP: 2 spines, 4 leaves, 4 links per pair
+//	tgen -s 2 -l 4 -links 4 -o ../ecmp/
+//
 //	# Full mesh: 4 nodes
 //	tgen -m -n 4 -o ../mylab/
 //
@@ -39,6 +42,7 @@ func main() {
 	mesh := fs.Bool("m", false, "generate full mesh topology")
 	ring := fs.Bool("r", false, "generate ring topology")
 	nodes := fs.Int("n", 0, "number of nodes (for -m or -r)")
+	links := fs.Int("links", 1, "parallel links per switch pair (for ECMP)")
 	hosts := fs.Int("h", 0, "number of hosts attached to each switch")
 	ports := fs.Int("p", 1, "number of ports per host (each port maps to a different switch)")
 
@@ -55,6 +59,9 @@ Topology modes (pick one):
   -r          Generate ring topology (use with -n)
   -n <int>    Number of nodes (for -m or -r)
 
+Links (optional):
+  -links <int>  Parallel links per switch pair (default 1; enables ECMP)
+
 Hosts (optional):
   -h <int>    Number of hosts attached to each switch
   -p <int>    Number of ports per host (default 1; each port maps to a
@@ -64,11 +71,11 @@ Output:
   -o <dir>    Output directory (default ".", must be a direct child of repo root)
 
 Examples:
-  tgen -s 1 -l 4 -o ../mylab/     # 1 spine, 4 leaves
-  tgen -s 2 -l 6 -o ../dc/        # 2 spines, 6 leaves
-  tgen -m -n 5 -o ../mesh/        # Full mesh of 5 nodes
-  tgen -r -n 8 -o ../ring/        # Ring of 8 nodes
-  tgen -s 2 -l 2 -h 2 -p 2 -o ../lab/  # 2x2 spine-leaf with 2 hosts/switch, 2 ports each
+  tgen -s 1 -l 4 -o ../mylab/              # 1 spine, 4 leaves
+  tgen -s 2 -l 4 -links 4 -o ../ecmp/     # 2x4 spine-leaf, 4 links per pair
+  tgen -m -n 5 -links 2 -o ../mesh/       # Full mesh of 5, 2 links per pair
+  tgen -r -n 8 -links 2 -o ../ring/       # Ring of 8, 2 links per neighbor
+  tgen -s 2 -l 2 -h 2 -p 2 -o ../lab/    # 2x2 spine-leaf with hosts
 `)
 	}
 
@@ -81,6 +88,7 @@ Examples:
 		Mesh:           *mesh,
 		Ring:           *ring,
 		Nodes:          *nodes,
+		Links:          *links,
 		HostsPerSwitch: *hosts,
 		PortsPerHost:   *ports,
 	}

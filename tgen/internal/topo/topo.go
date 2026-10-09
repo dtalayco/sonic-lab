@@ -61,6 +61,7 @@ type Options struct {
 	Mesh            bool // -m: generate full mesh topology
 	Ring            bool // -r: generate ring topology
 	Nodes           int  // -n: number of nodes (for mesh/ring)
+	Links           int  // -links: parallel links per switch pair (default 1)
 	HostsPerSwitch  int  // -h: number of hosts attached to each switch
 	PortsPerHost    int  // -p: number of ports per host (default 1)
 }
@@ -84,6 +85,11 @@ func VtepAddrForASN(asn int) string {
 
 // Generate builds a Topology from the given Options.
 func Generate(opts Options) (*Topology, error) {
+	// Default to 1 link per pair if not specified
+	if opts.Links < 1 {
+		opts.Links = 1
+	}
+
 	var t *Topology
 
 	switch {
@@ -91,17 +97,21 @@ func Generate(opts Options) (*Topology, error) {
 		if opts.Nodes < 2 {
 			return nil, fmt.Errorf("mesh requires at least 2 nodes (got %d)", opts.Nodes)
 		}
-		if opts.Nodes-1 > MaxPorts {
-			return nil, fmt.Errorf("mesh of %d nodes requires %d ports per node, exceeds max %d",
-				opts.Nodes, opts.Nodes-1, MaxPorts)
+		if (opts.Nodes-1)*opts.Links > MaxPorts {
+			return nil, fmt.Errorf("mesh of %d nodes with %d links requires %d ports per node, exceeds max %d",
+				opts.Nodes, opts.Links, (opts.Nodes-1)*opts.Links, MaxPorts)
 		}
-		t = mesh(opts.Nodes)
+		t = mesh(opts.Nodes, opts.Links)
 
 	case opts.Ring:
 		if opts.Nodes < 3 {
 			return nil, fmt.Errorf("ring requires at least 3 nodes (got %d)", opts.Nodes)
 		}
-		t = ring(opts.Nodes)
+		if 2*opts.Links > MaxPorts {
+			return nil, fmt.Errorf("ring with %d links requires %d ports per node, exceeds max %d",
+				opts.Links, 2*opts.Links, MaxPorts)
+		}
+		t = ring(opts.Nodes, opts.Links)
 
 	default:
 		if opts.Spines < 1 {
@@ -110,13 +120,15 @@ func Generate(opts Options) (*Topology, error) {
 		if opts.Leaves < 1 {
 			return nil, fmt.Errorf("spine-leaf requires at least 1 leaf (got %d)", opts.Leaves)
 		}
-		if opts.Spines > MaxPorts {
-			return nil, fmt.Errorf("each leaf would need %d ports, exceeds max %d", opts.Spines, MaxPorts)
+		if opts.Leaves*opts.Links > MaxPorts {
+			return nil, fmt.Errorf("each spine would need %d ports (%d leaves x %d links), exceeds max %d",
+				opts.Leaves*opts.Links, opts.Leaves, opts.Links, MaxPorts)
 		}
-		if opts.Leaves > MaxPorts {
-			return nil, fmt.Errorf("each spine would need %d ports, exceeds max %d", opts.Leaves, MaxPorts)
+		if opts.Spines*opts.Links > MaxPorts {
+			return nil, fmt.Errorf("each leaf would need %d ports (%d spines x %d links), exceeds max %d",
+				opts.Spines*opts.Links, opts.Spines, opts.Links, MaxPorts)
 		}
-		t = spineLeaf(opts.Spines, opts.Leaves)
+		t = spineLeaf(opts.Spines, opts.Leaves, opts.Links)
 	}
 
 	// Add hosts if requested
@@ -187,11 +199,11 @@ func addHosts(t *Topology, hostsPerSwitch, portsPerHost int) error {
 }
 
 // spineLeaf generates a classic spine-leaf topology where every leaf
-// has one uplink to every spine.
-func spineLeaf(spines, leaves int) *Topology {
+// has `links` parallel uplinks to every spine (for ECMP).
+func spineLeaf(spines, leaves, links int) *Topology {
 	t := &Topology{Name: fmt.Sprintf("spine-leaf-%dx%d", spines, leaves)}
 
-	// Create spines
+	// Create spines: each has leaves*links ports
 	for s := 0; s < spines; s++ {
 		asn := 65000 + s
 		sw := Switch{
@@ -200,14 +212,16 @@ func spineLeaf(spines, leaves int) *Topology {
 			ASN:      asn,
 			VtepAddr: VtepAddrForASN(asn),
 		}
-		// Each spine has one port per leaf
+		// Ports grouped by leaf: leaf l uses port indices [l*links, (l+1)*links)
 		for l := 0; l < leaves; l++ {
-			sw.Ports = append(sw.Ports, portName(l))
+			for k := 0; k < links; k++ {
+				sw.Ports = append(sw.Ports, portName(l*links+k))
+			}
 		}
 		t.Switches = append(t.Switches, sw)
 	}
 
-	// Create leaves
+	// Create leaves: each has spines*links ports
 	for l := 0; l < leaves; l++ {
 		asn := 65100 + l
 		sw := Switch{
@@ -216,26 +230,30 @@ func spineLeaf(spines, leaves int) *Topology {
 			ASN:      asn,
 			VtepAddr: VtepAddrForASN(asn),
 		}
-		// Each leaf has one port per spine
+		// Ports grouped by spine: spine s uses port indices [s*links, (s+1)*links)
 		for s := 0; s < spines; s++ {
-			sw.Ports = append(sw.Ports, portName(s))
+			for k := 0; k < links; k++ {
+				sw.Ports = append(sw.Ports, portName(s*links+k))
+			}
 		}
 		t.Switches = append(t.Switches, sw)
 	}
 
-	// Create links: leaf[l] ↔ spine[s]
+	// Create links: leaf[l] ↔ spine[s], `links` parallel links per pair
 	for s := 0; s < spines; s++ {
 		for l := 0; l < leaves; l++ {
-			t.Links = append(t.Links, Link{
-				A: Endpoint{
-					Device: fmt.Sprintf("spine%d-linux", s+1),
-					Port:   portName(l),
-				},
-				B: Endpoint{
-					Device: fmt.Sprintf("leaf%d-linux", l+1),
-					Port:   portName(s),
-				},
-			})
+			for k := 0; k < links; k++ {
+				t.Links = append(t.Links, Link{
+					A: Endpoint{
+						Device: fmt.Sprintf("spine%d-linux", s+1),
+						Port:   portName(l*links + k),
+					},
+					B: Endpoint{
+						Device: fmt.Sprintf("leaf%d-linux", l+1),
+						Port:   portName(s*links + k),
+					},
+				})
+			}
 		}
 	}
 
@@ -243,11 +261,11 @@ func spineLeaf(spines, leaves int) *Topology {
 }
 
 // mesh generates a full mesh topology where every node is connected
-// to every other node.
-func mesh(n int) *Topology {
+// to every other node with `links` parallel links per pair.
+func mesh(n, links int) *Topology {
 	t := &Topology{Name: fmt.Sprintf("mesh-%d", n)}
 
-	// Create nodes
+	// Create nodes: each has (n-1)*links ports
 	for i := 0; i < n; i++ {
 		asn := 65000 + i
 		sw := Switch{
@@ -256,9 +274,11 @@ func mesh(n int) *Topology {
 			ASN:      asn,
 			VtepAddr: VtepAddrForASN(asn),
 		}
-		// Each node has n-1 ports (one per peer)
+		// Ports grouped by peer position (self skipped)
 		for p := 0; p < n-1; p++ {
-			sw.Ports = append(sw.Ports, portName(p))
+			for k := 0; k < links; k++ {
+				sw.Ports = append(sw.Ports, portName(p*links+k))
+			}
 		}
 		t.Switches = append(t.Switches, sw)
 	}
@@ -266,18 +286,20 @@ func mesh(n int) *Topology {
 	// Create links: for each pair (i, j) where i < j
 	for i := 0; i < n; i++ {
 		for j := i + 1; j < n; j++ {
-			// Node i: peer j is at port index (j-1) [skip self]
-			// Node j: peer i is at port index i
-			t.Links = append(t.Links, Link{
-				A: Endpoint{
-					Device: fmt.Sprintf("node%d-linux", i+1),
-					Port:   portName(j - 1),
-				},
-				B: Endpoint{
-					Device: fmt.Sprintf("node%d-linux", j+1),
-					Port:   portName(i),
-				},
-			})
+			// Node i: peer j is at position (j-1) in the peer list [skip self at i]
+			// Node j: peer i is at position i in the peer list [i < j, so i keeps its index]
+			for k := 0; k < links; k++ {
+				t.Links = append(t.Links, Link{
+					A: Endpoint{
+						Device: fmt.Sprintf("node%d-linux", i+1),
+						Port:   portName((j-1)*links + k),
+					},
+					B: Endpoint{
+						Device: fmt.Sprintf("node%d-linux", j+1),
+						Port:   portName(i*links + k),
+					},
+				})
+			}
 		}
 	}
 
@@ -285,11 +307,11 @@ func mesh(n int) *Topology {
 }
 
 // ring generates a ring topology where each node connects to its
-// two neighbors (previous and next in the ring).
-func ring(n int) *Topology {
+// two neighbors with `links` parallel links per neighbor (for ECMP).
+func ring(n, links int) *Topology {
 	t := &Topology{Name: fmt.Sprintf("ring-%d", n)}
 
-	// Create nodes
+	// Create nodes: each has 2*links ports
 	for i := 0; i < n; i++ {
 		asn := 65000 + i
 		sw := Switch{
@@ -297,25 +319,29 @@ func ring(n int) *Topology {
 			Role:     "node",
 			ASN:      asn,
 			VtepAddr: VtepAddrForASN(asn),
-			// Each node has exactly 2 ports
-			Ports: []string{portName(0), portName(1)},
+		}
+		// Ports 0..links-1: "prev" neighbor; ports links..2*links-1: "next" neighbor
+		for p := 0; p < 2*links; p++ {
+			sw.Ports = append(sw.Ports, portName(p))
 		}
 		t.Switches = append(t.Switches, sw)
 	}
 
-	// Create links: node[i] next-port → node[(i+1)%n] prev-port
+	// Create links: for each pair of neighbors in the ring, `links` parallel links
 	for i := 0; i < n; i++ {
 		next := (i + 1) % n
-		t.Links = append(t.Links, Link{
-			A: Endpoint{
-				Device: fmt.Sprintf("node%d-linux", i+1),
-				Port:   portName(1), // "next" port
-			},
-			B: Endpoint{
-				Device: fmt.Sprintf("node%d-linux", next+1),
-				Port:   portName(0), // "prev" port
-			},
-		})
+		for k := 0; k < links; k++ {
+			t.Links = append(t.Links, Link{
+				A: Endpoint{
+					Device: fmt.Sprintf("node%d-linux", i+1),
+					Port:   portName(links + k), // "next" side
+				},
+				B: Endpoint{
+					Device: fmt.Sprintf("node%d-linux", next+1),
+					Port:   portName(k), // "prev" side
+				},
+			})
+		}
 	}
 
 	return t
