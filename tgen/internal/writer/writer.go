@@ -315,8 +315,19 @@ if [ -n "$VTEP" ]; then
     ip link set Loopback0 up
     echo "Loopback0 created with VTEP address $VTEP"
 
-    # Bring up all Ethernet* interfaces BEFORE starting bgpd.
-    # Zebra must see them as UP before bgpd connects, otherwise
+    # Set admin up in SONiC CONFIG_DB for all Ethernet interfaces.
+    # This tells orchagent to program the port; required for the
+    # interface to show as "up" in "show interfaces status".
+    for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep '^Ethernet'); do
+        config interface startup "$iface" 2>/dev/null || true
+    done
+    echo "Set admin up for Ethernet interfaces"
+
+    # Wait for orchagent to process the admin-up requests.
+    sleep 5
+
+    # Bring up all Ethernet* interfaces in the kernel BEFORE starting
+    # bgpd. Zebra must see them as UP before bgpd connects, otherwise
     # bgpd crashes when reading the config with unnumbered neighbors.
     for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep '^Ethernet'); do
         ip link set "$iface" up 2>/dev/null || true
