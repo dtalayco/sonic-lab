@@ -20,11 +20,11 @@ func TestKernelPortName(t *testing.T) {
 		port string
 		want string
 	}{
-		{"Ethernet0", "eth0"},
-		{"Ethernet4", "eth1"},
-		{"Ethernet8", "eth2"},
-		{"Ethernet28", "eth7"},
-		{"Ethernet116", "eth29"},
+		{"Ethernet0", "Ethernet0"},
+		{"Ethernet4", "Ethernet4"},
+		{"Ethernet8", "Ethernet8"},
+		{"Ethernet28", "Ethernet28"},
+		{"Ethernet116", "Ethernet116"},
 	}
 	for _, tc := range tests {
 		if got := kernelPortName(tc.port); got != tc.want {
@@ -69,26 +69,26 @@ func TestGenerateFRRConfig_SpineLeaf(t *testing.T) {
 		t.Errorf("spine1 config missing VTEP address")
 	}
 
-	// Should have BGP unnumbered neighbor for leaf1 (eth0) and leaf2 (eth1)
-	if !strings.Contains(cfg, "neighbor eth0 remote-as 65100") {
-		t.Errorf("spine1 config missing 'neighbor eth0 remote-as 65100'")
+	// Should have BGP unnumbered neighbor for leaf1 (Ethernet0) and leaf2 (Ethernet4)
+	if !strings.Contains(cfg, "neighbor Ethernet0 remote-as 65100") {
+		t.Errorf("spine1 config missing 'neighbor Ethernet0 remote-as 65100'")
 	}
-	if !strings.Contains(cfg, "neighbor eth0 unnumbered") {
-		t.Errorf("spine1 config missing 'neighbor eth0 unnumbered'")
+	if !strings.Contains(cfg, "neighbor Ethernet0 unnumbered") {
+		t.Errorf("spine1 config missing 'neighbor Ethernet0 unnumbered'")
 	}
-	if !strings.Contains(cfg, "neighbor eth1 remote-as 65101") {
-		t.Errorf("spine1 config missing 'neighbor eth1 remote-as 65101'")
+	if !strings.Contains(cfg, "neighbor Ethernet4 remote-as 65101") {
+		t.Errorf("spine1 config missing 'neighbor Ethernet4 remote-as 65101'")
 	}
-	if !strings.Contains(cfg, "neighbor eth1 unnumbered") {
-		t.Errorf("spine1 config missing 'neighbor eth1 unnumbered'")
+	if !strings.Contains(cfg, "neighbor Ethernet4 unnumbered") {
+		t.Errorf("spine1 config missing 'neighbor Ethernet4 unnumbered'")
 	}
 
 	// Should have IPv6 address family with activate and network
 	if !strings.Contains(cfg, "address-family ipv6") {
 		t.Errorf("spine1 config missing 'address-family ipv6'")
 	}
-	if !strings.Contains(cfg, "neighbor eth0 activate") {
-		t.Errorf("spine1 config missing 'neighbor eth0 activate'")
+	if !strings.Contains(cfg, "neighbor Ethernet0 activate") {
+		t.Errorf("spine1 config missing 'neighbor Ethernet0 activate'")
 	}
 	if !strings.Contains(cfg, "network fd00:0:0:fde8::1/128") {
 		t.Errorf("spine1 config missing network statement")
@@ -111,12 +111,12 @@ func TestGenerateFRRConfig_Leaf(t *testing.T) {
 
 	cfg := w.generateFRRConfig(*leaf)
 
-	// Leaf1 connects to spine1 (eth0) and spine2 (eth1)
-	if !strings.Contains(cfg, "neighbor eth0 remote-as 65000") {
-		t.Errorf("leaf1 config missing 'neighbor eth0 remote-as 65000'")
+	// Leaf1 connects to spine1 (Ethernet0) and spine2 (Ethernet4)
+	if !strings.Contains(cfg, "neighbor Ethernet0 remote-as 65000") {
+		t.Errorf("leaf1 config missing 'neighbor Ethernet0 remote-as 65000'")
 	}
-	if !strings.Contains(cfg, "neighbor eth1 remote-as 65001") {
-		t.Errorf("leaf1 config missing 'neighbor eth1 remote-as 65001'")
+	if !strings.Contains(cfg, "neighbor Ethernet4 remote-as 65001") {
+		t.Errorf("leaf1 config missing 'neighbor Ethernet4 remote-as 65001'")
 	}
 
 	// Should have correct VTEP address for leaf1 (ASN 65100 = 0xFE4C)
@@ -129,7 +129,7 @@ func TestGenerateFRRConfig_Mesh(t *testing.T) {
 	tt := mustGenerate(t, topo.Options{Mesh: true, Nodes: 3})
 	w := New("/tmp/test", tt)
 
-	// node1 connects to node2 (eth0) and node3 (eth1)
+	// node1 connects to node2 (Ethernet0) and node3 (Ethernet4)
 	var node1 *topo.Switch
 	for i := range tt.Switches {
 		if tt.Switches[i].Name == "node1" {
@@ -138,11 +138,11 @@ func TestGenerateFRRConfig_Mesh(t *testing.T) {
 	}
 	cfg := w.generateFRRConfig(*node1)
 
-	if !strings.Contains(cfg, "neighbor eth0 remote-as 65001") {
-		t.Errorf("node1 config missing 'neighbor eth0 remote-as 65001' (node2)")
+	if !strings.Contains(cfg, "neighbor Ethernet0 remote-as 65001") {
+		t.Errorf("node1 config missing 'neighbor Ethernet0 remote-as 65001' (node2)")
 	}
-	if !strings.Contains(cfg, "neighbor eth1 remote-as 65002") {
-		t.Errorf("node1 config missing 'neighbor eth1 remote-as 65002' (node3)")
+	if !strings.Contains(cfg, "neighbor Ethernet4 remote-as 65002") {
+		t.Errorf("node1 config missing 'neighbor Ethernet4 remote-as 65002' (node3)")
 	}
 }
 
@@ -150,7 +150,7 @@ func TestGenerateFRRConfig_Ring(t *testing.T) {
 	tt := mustGenerate(t, topo.Options{Ring: true, Nodes: 3})
 	w := New("/tmp/test", tt)
 
-	// node1 connects to node2 (port Ethernet4 = eth1, "next") and node3 (port Ethernet0 = eth0, "prev")
+	// node1:Ethernet0 (connects to node3) and Ethernet4 (connects to node2)
 	// Ring link: node[i]:Ethernet4 → node[(i+1)%n]:Ethernet0
 	// node1:Ethernet4 → node2:Ethernet0
 	// node3:Ethernet4 → node1:Ethernet0
@@ -164,13 +164,13 @@ func TestGenerateFRRConfig_Ring(t *testing.T) {
 	}
 	cfg := w.generateFRRConfig(*node1)
 
-	// node1:Ethernet0 (eth0) connects to node3 (from ring wraparound: node3:Ethernet4 → node1:Ethernet0)
-	// node1:Ethernet4 (eth1) connects to node2 (from node1:Ethernet4 → node2:Ethernet0)
-	if !strings.Contains(cfg, "neighbor eth0 remote-as 65002") {
-		t.Errorf("node1 config missing 'neighbor eth0 remote-as 65002' (node3 via ring wrap)")
+	// node1:Ethernet0 connects to node3 (from ring wraparound: node3:Ethernet4 → node1:Ethernet0)
+	// node1:Ethernet4 connects to node2 (from node1:Ethernet4 → node2:Ethernet0)
+	if !strings.Contains(cfg, "neighbor Ethernet0 remote-as 65002") {
+		t.Errorf("node1 config missing 'neighbor Ethernet0 remote-as 65002' (node3 via ring wrap)")
 	}
-	if !strings.Contains(cfg, "neighbor eth1 remote-as 65001") {
-		t.Errorf("node1 config missing 'neighbor eth1 remote-as 65001' (node2)")
+	if !strings.Contains(cfg, "neighbor Ethernet4 remote-as 65001") {
+		t.Errorf("node1 config missing 'neighbor Ethernet4 remote-as 65001' (node2)")
 	}
 }
 
@@ -189,12 +189,12 @@ func TestGenerateFRRConfig_ExcludesHostLinks(t *testing.T) {
 	cfg := w.generateFRRConfig(*spine)
 
 	// spine1 has 2 ports: Ethernet0 (to leaf1) and Ethernet4 (to host1)
-	// The FRR config should only include the leaf1 neighbor (eth0), not the host link (eth1)
-	if !strings.Contains(cfg, "neighbor eth0 remote-as 65100") {
-		t.Errorf("spine1 config missing 'neighbor eth0 remote-as 65100' (leaf1)")
+	// The FRR config should only include the leaf1 neighbor (Ethernet0), not the host link (Ethernet4)
+	if !strings.Contains(cfg, "neighbor Ethernet0 remote-as 65100") {
+		t.Errorf("spine1 config missing 'neighbor Ethernet0 remote-as 65100' (leaf1)")
 	}
-	if strings.Contains(cfg, "neighbor eth1") {
-		t.Errorf("spine1 config should not include host link on eth1")
+	if strings.Contains(cfg, "neighbor Ethernet4") {
+		t.Errorf("spine1 config should not include host link on Ethernet4")
 	}
 }
 

@@ -47,13 +47,13 @@ if [ -n "$VTEP" ]; then
     ip link set Loopback0 up
     echo "Loopback0 created with VTEP address $VTEP"
 
-    # Bring up all eth* interfaces to ensure they have link-local
+    # Bring up all Ethernet* interfaces to ensure they have link-local
     # IPv6 addresses. FRR's bgpd will crash if a BGP unnumbered
-    # neighbor references an interface that doesn't exist or is down.
-    for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep '^eth'); do
+    # neighbor references an interface that doesn't exist.
+    for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep '^Ethernet'); do
         ip link set "$iface" up 2>/dev/null || true
     done
-    echo "Brought up eth interfaces"
+    echo "Brought up Ethernet interfaces"
 
     # Load FRR config explicitly. Non-fatal: if it fails the container
     # should stay up so we can debug.
