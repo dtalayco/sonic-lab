@@ -95,7 +95,24 @@ Ports use step-4 Ethernet naming (`Ethernet0`, `Ethernet4`, `Ethernet8`,
 
 (30 is the max due to the KVM 30-lane platform limitation.)
 
-## Build
+### BGP Unnumbered Underlay
+
+Every switch gets an eBGP ASN and a deterministic VTEP IPv6 ULA loopback
+address (`fd00:0:0:<asn>::1/128`). The generated `frr/<switch>.conf`
+file configures FRR with:
+
+- **Loopback0** — the VTEP address, created by `sonic_entry.sh` before
+  supervisord starts
+- **BGP unnumbered** — one neighbor per switch-to-switch link, using the
+  kernel interface name (`eth0`, `eth1`, …) with the `unnumbered` keyword
+  (sessions established over link-local)
+- **IPv6 address family** — each switch advertises its VTEP `/128` prefix
+
+Host connections are excluded from the BGP neighbor list. The FRR config
+is mounted at `/etc/frr/frr.conf` inside each SONiC container; FRR picks
+it up on startup via supervisord.
+
+### Build
 
 ```bash
 cd tgen

@@ -493,3 +493,34 @@ func TestHosts_SwitchPortAllocation(t *testing.T) {
 func isHostEndpoint(e Endpoint) bool {
 	return len(e.Device) > 4 && e.Device[:4] == "host"
 }
+
+func TestVtepAddrForASN(t *testing.T) {
+	tests := []struct {
+		asn  int
+		want string
+	}{
+		{1, "fd00:0:0:1::1/128"},
+		{65000, "fd00:0:0:fde8::1/128"},
+		{65100, "fd00:0:0:fe4c::1/128"},
+		{65535, "fd00:0:0:ffff::1/128"},
+	}
+	for _, tc := range tests {
+		if got := VtepAddrForASN(tc.asn); got != tc.want {
+			t.Errorf("VtepAddrForASN(%d) = %q, want %q", tc.asn, got, tc.want)
+		}
+	}
+}
+
+func TestVtepAddr_SetInTopology(t *testing.T) {
+	tt := mustGenerate(t, Options{Spines: 1, Leaves: 2})
+	for _, sw := range tt.Switches {
+		if sw.VtepAddr == "" {
+			t.Errorf("%s: VtepAddr is empty", sw.Name)
+		}
+		// Verify the address encodes the ASN
+		want := VtepAddrForASN(sw.ASN)
+		if sw.VtepAddr != want {
+			t.Errorf("%s: VtepAddr = %q, want %q", sw.Name, sw.VtepAddr, want)
+		}
+	}
+}

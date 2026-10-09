@@ -29,10 +29,11 @@ type Topology struct {
 
 // Switch represents a single SONiC virtual switch.
 type Switch struct {
-	Name  string
-	Role  string // "spine", "leaf", or "node"
-	ASN   int
-	Ports []string
+	Name     string
+	Role     string // "spine", "leaf", or "node"
+	ASN      int
+	VtepAddr string // VTEP IPv6 ULA loopback address (e.g. fd00:0:0:fd98::1/128)
+	Ports    []string
 }
 
 // Host represents a simulated host container attached to one or more switches.
@@ -72,6 +73,13 @@ const MaxPorts = 30
 // Ports use step-4 naming to match the KVM lane map.
 func portName(index int) string {
 	return fmt.Sprintf("Ethernet%d", index*4)
+}
+
+// VtepAddrForASN returns a deterministic VTEP IPv6 ULA loopback address
+// derived from the switch's ASN. Scheme: fd00:0:0:<asn>::1/128.
+// Only 2-byte ASNs (0-65535) are supported, which covers all lab use cases.
+func VtepAddrForASN(asn int) string {
+	return fmt.Sprintf("fd00:0:0:%x::1/128", asn)
 }
 
 // Generate builds a Topology from the given Options.
@@ -185,10 +193,12 @@ func spineLeaf(spines, leaves int) *Topology {
 
 	// Create spines
 	for s := 0; s < spines; s++ {
+		asn := 65000 + s
 		sw := Switch{
-			Name: fmt.Sprintf("spine%d", s+1),
-			Role: "spine",
-			ASN:  65000 + s,
+			Name:     fmt.Sprintf("spine%d", s+1),
+			Role:     "spine",
+			ASN:      asn,
+			VtepAddr: VtepAddrForASN(asn),
 		}
 		// Each spine has one port per leaf
 		for l := 0; l < leaves; l++ {
@@ -199,10 +209,12 @@ func spineLeaf(spines, leaves int) *Topology {
 
 	// Create leaves
 	for l := 0; l < leaves; l++ {
+		asn := 65100 + l
 		sw := Switch{
-			Name: fmt.Sprintf("leaf%d", l+1),
-			Role: "leaf",
-			ASN:  65100 + l,
+			Name:     fmt.Sprintf("leaf%d", l+1),
+			Role:     "leaf",
+			ASN:      asn,
+			VtepAddr: VtepAddrForASN(asn),
 		}
 		// Each leaf has one port per spine
 		for s := 0; s < spines; s++ {
@@ -237,10 +249,12 @@ func mesh(n int) *Topology {
 
 	// Create nodes
 	for i := 0; i < n; i++ {
+		asn := 65000 + i
 		sw := Switch{
-			Name: fmt.Sprintf("node%d", i+1),
-			Role: "node",
-			ASN:  65000 + i,
+			Name:     fmt.Sprintf("node%d", i+1),
+			Role:     "node",
+			ASN:      asn,
+			VtepAddr: VtepAddrForASN(asn),
 		}
 		// Each node has n-1 ports (one per peer)
 		for p := 0; p < n-1; p++ {
@@ -277,10 +291,12 @@ func ring(n int) *Topology {
 
 	// Create nodes
 	for i := 0; i < n; i++ {
+		asn := 65000 + i
 		sw := Switch{
-			Name: fmt.Sprintf("node%d", i+1),
-			Role: "node",
-			ASN:  65000 + i,
+			Name:     fmt.Sprintf("node%d", i+1),
+			Role:     "node",
+			ASN:      asn,
+			VtepAddr: VtepAddrForASN(asn),
 			// Each node has exactly 2 ports
 			Ports: []string{portName(0), portName(1)},
 		}

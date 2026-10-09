@@ -23,6 +23,15 @@ x-debian-common: &debian-common
     - ./tmp/vnet_ready:/tmp/vnet_ready:rw
   shm_size: "2gb"
 
+x-host-common: &host-common
+  build:
+    context: ..
+    dockerfile: Dockerfile.host
+  image: sonic-lab/host:latest
+  platform: linux/amd64
+  privileged: true
+  tty: true
+
 services:
   #################################
   # Webmesh patch panel container #
@@ -58,6 +67,11 @@ services:
     container_name: spine1-linux
     command: ["bash", "/init_linux.sh", "spine1-linux"]
 
+  spine2-linux:
+    <<: *debian-common
+    container_name: spine2-linux
+    command: ["bash", "/init_linux.sh", "spine2-linux"]
+
   leaf1-linux:
     <<: *debian-common
     container_name: leaf1-linux
@@ -67,6 +81,16 @@ services:
     <<: *debian-common
     container_name: leaf2-linux
     command: ["bash", "/init_linux.sh", "leaf2-linux"]
+
+  leaf3-linux:
+    <<: *debian-common
+    container_name: leaf3-linux
+    command: ["bash", "/init_linux.sh", "leaf3-linux"]
+
+  leaf4-linux:
+    <<: *debian-common
+    container_name: leaf4-linux
+    command: ["bash", "/init_linux.sh", "leaf4-linux"]
 
   ###########################
   # SONiC VS containers      #
@@ -85,7 +109,24 @@ services:
       - ./tmp/vnet_ready:/tmp/vnet_ready:ro
       - /var/run/redis-vs/spine1:/var/run/redis
       - ./sonic_entry.sh:/sonic_entry.sh:ro
-    entrypoint: ["/bin/bash", "/sonic_entry.sh", "spine1-linux"]
+      - ./frr/spine1.conf:/etc/frr/frr.conf:ro
+    entrypoint: ["/bin/bash", "/sonic_entry.sh", "spine1-linux", "fd00:0:0:fde8::1/128"]
+
+  spine2:
+    <<: *sonic-common
+    container_name: sonic-spine2
+    depends_on:
+      webmesh:
+        condition: service_healthy
+      spine2-linux:
+        condition: service_started
+    network_mode: "service:spine2-linux"
+    volumes:
+      - ./tmp/vnet_ready:/tmp/vnet_ready:ro
+      - /var/run/redis-vs/spine2:/var/run/redis
+      - ./sonic_entry.sh:/sonic_entry.sh:ro
+      - ./frr/spine2.conf:/etc/frr/frr.conf:ro
+    entrypoint: ["/bin/bash", "/sonic_entry.sh", "spine2-linux", "fd00:0:0:fde9::1/128"]
 
   leaf1:
     <<: *sonic-common
@@ -100,7 +141,8 @@ services:
       - ./tmp/vnet_ready:/tmp/vnet_ready:ro
       - /var/run/redis-vs/leaf1:/var/run/redis
       - ./sonic_entry.sh:/sonic_entry.sh:ro
-    entrypoint: ["/bin/bash", "/sonic_entry.sh", "leaf1-linux"]
+      - ./frr/leaf1.conf:/etc/frr/frr.conf:ro
+    entrypoint: ["/bin/bash", "/sonic_entry.sh", "leaf1-linux", "fd00:0:0:fe4c::1/128"]
 
   leaf2:
     <<: *sonic-common
@@ -115,4 +157,37 @@ services:
       - ./tmp/vnet_ready:/tmp/vnet_ready:ro
       - /var/run/redis-vs/leaf2:/var/run/redis
       - ./sonic_entry.sh:/sonic_entry.sh:ro
-    entrypoint: ["/bin/bash", "/sonic_entry.sh", "leaf2-linux"]
+      - ./frr/leaf2.conf:/etc/frr/frr.conf:ro
+    entrypoint: ["/bin/bash", "/sonic_entry.sh", "leaf2-linux", "fd00:0:0:fe4d::1/128"]
+
+  leaf3:
+    <<: *sonic-common
+    container_name: sonic-leaf3
+    depends_on:
+      webmesh:
+        condition: service_healthy
+      leaf3-linux:
+        condition: service_started
+    network_mode: "service:leaf3-linux"
+    volumes:
+      - ./tmp/vnet_ready:/tmp/vnet_ready:ro
+      - /var/run/redis-vs/leaf3:/var/run/redis
+      - ./sonic_entry.sh:/sonic_entry.sh:ro
+      - ./frr/leaf3.conf:/etc/frr/frr.conf:ro
+    entrypoint: ["/bin/bash", "/sonic_entry.sh", "leaf3-linux", "fd00:0:0:fe4e::1/128"]
+
+  leaf4:
+    <<: *sonic-common
+    container_name: sonic-leaf4
+    depends_on:
+      webmesh:
+        condition: service_healthy
+      leaf4-linux:
+        condition: service_started
+    network_mode: "service:leaf4-linux"
+    volumes:
+      - ./tmp/vnet_ready:/tmp/vnet_ready:ro
+      - /var/run/redis-vs/leaf4:/var/run/redis
+      - ./sonic_entry.sh:/sonic_entry.sh:ro
+      - ./frr/leaf4.conf:/etc/frr/frr.conf:ro
+    entrypoint: ["/bin/bash", "/sonic_entry.sh", "leaf4-linux", "fd00:0:0:fe4f::1/128"]
