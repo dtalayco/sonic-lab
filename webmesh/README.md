@@ -197,6 +197,23 @@ ip -6 route add 2001:db8::/64 encap seg6 mode encap segs 2001:db8::1 dev lo 2>&1
 No special Docker image is required — the stock `docker-sonic-vs:latest`
 includes iproute2 6.1.0 which fully supports seg6 lwtunnel route syntax.
 
+### SRv6 Data Plane Caveat (Colima)
+
+In the Colima VM environment (Ubuntu 24.04 HWE, kernel 6.8.0-64-generic),
+cross-namespace seg6 decapsulation is silently dropped. The control plane
+(FRR locators, SIDs, BGP SID distribution) and the sender side (seg6
+encapsulation, ECMP distribution) are fully functional, but packets
+encapsulated by one switch's kernel and received on a veth interface in
+another switch's namespace are dropped without any counter increment.
+
+This is not caused by `seg6_enabled` (tested and ruled out), netfilter,
+or TC filters. It is believed to be a kernel-level restriction or bug
+specific to this Ubuntu HWE build when processing seg6-encapsulated IPv6
+packets received on veth interfaces from a different network namespace.
+
+If you need SRv6 data plane verification, run on a kernel with full
+tracing support (ftrace/perf) to identify the exact drop point.
+
 ## eBPF Program
 
 The BPF program (`bpf/patch_panel.c`) is a TC ingress classifier that:

@@ -155,13 +155,41 @@ Per-switch artifacts:
 The routes file is mounted at `/srv6.routes` (read-only) and executed by
 `sonic_entry.sh` after the FRR config loads.
 
+**Verifying the control plane:**
+
+```bash
+# From any switch, confirm FRR loaded the SRv6 config:
+docker exec sonic-leaf1 vtysh -c "show segment-routing srv6 locator"
+docker exec sonic-leaf1 vtysh -c "show segment-routing srv6 sid"
+
+# Confirm BGP is distributing VTEP prefixes (should show all switch VTEPs):
+docker exec sonic-leaf1 vtysh -c "show ipv6 bgp" | grep "fd00:0:0"
+```
+
 **Verifying the data plane:**
 
 ```bash
 # From any switch, ping the remote switch's overlay address:
 docker exec sonic-leaf1 ping6 -c 3 2001:db8:fe4d::1
-# 0% packet loss confirms seg6 encapsulation + decapsulation end-to-end.
 ```
+
+> **Known limitation (Colima 6.8 HWE kernel):** Cross-namespace seg6
+> decapsulation is silently dropped in this environment. Packets arrive at
+> the receiving interface (confirmed via `tcpdump -i Ethernet12`) but the
+> kernel's seg6 input path drops them without incrementing any standard
+> counter (`Ip6InDelivers`, `Ip6InDiscards`, `Ip6InHdrErrors` all remain
+> zero). Setting `seg6_enabled=1` on all Ethernet interfaces does not fix
+> it. The root cause is believed to be a restriction or bug in the Ubuntu
+> 24.04 HWE kernel (6.8.0-64-generic) when processing seg6-encapsulated
+> packets received on veth interfaces from a different network namespace.
+>
+> Local seg6 (same namespace, Loopback0→Loopback0) and in-container veth
+> seg6 both work correctly. The sender side (encapsulation + ECMP
+> distribution across parallel links) is confirmed working.
+>
+> If you run on a different kernel (e.g., mainline 6.8 with ftrace enabled,
+> or a Linux VM with full tracing), the data plane may work. Test with:
+> `ip seg6local add dev Loopback0 mode end` on the receiver, then ping.
 
 **Kernel requirement:** The host kernel must have `CONFIG_IPV6_SEG6_LWTUNNEL=y`
 (built-in or module). Colima's 6.8.0 kernel includes it. No special Docker
