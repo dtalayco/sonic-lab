@@ -453,6 +453,33 @@ func (w *Writer) generateFRRConfig(sw topo.Switch) string {
 	sb.WriteString(fmt.Sprintf(" ipv6 address %s\n", sw.VtepAddr))
 	sb.WriteString("!\n")
 
+	// SRv6 locator + static SID (End behavior)
+	// Must appear BEFORE router bgp — FRR 10.4.1 parser cannot transition
+	// from one top-level node (router bgp) to another (segment-routing)
+	// within the same config file.
+	if w.Topology.SRv6 {
+		locatorName := sw.Name
+		locatorPrefix := topo.LocatorPrefixForASN(sw.ASN)
+		vtepBare := topo.VtepBareAddr(sw.VtepAddr)
+
+		sb.WriteString("segment-routing\n")
+		sb.WriteString(" srv6\n")
+		sb.WriteString("  locators\n")
+		sb.WriteString(fmt.Sprintf("   locator %s\n", locatorName))
+		sb.WriteString(fmt.Sprintf("    prefix %s\n", locatorPrefix))
+		sb.WriteString("   exit\n")
+		sb.WriteString("   !\n")
+		sb.WriteString("  exit\n")
+		sb.WriteString("  !\n")
+		sb.WriteString("  static-sids\n")
+		sb.WriteString(fmt.Sprintf("   sid %s/128 locator %s behavior uN\n", vtepBare, locatorName))
+		sb.WriteString("  exit\n")
+		sb.WriteString("  !\n")
+		sb.WriteString(" exit\n")
+		sb.WriteString(" !\n")
+		sb.WriteString("!\n")
+	}
+
 	// BGP router
 	sb.WriteString(fmt.Sprintf("router bgp %d\n", sw.ASN))
 	sb.WriteString(" !\n")
@@ -480,28 +507,12 @@ func (w *Writer) generateFRRConfig(sw topo.Switch) string {
 	sb.WriteString("  neighbor TRANSIT next-hop-self\n")
 	sb.WriteString(" exit-address-family\n")
 
-	// SRv6 in BGP (advertisements + SID distribution)
+	// SRv6 in BGP (SID distribution via BGP)
 	if w.Topology.SRv6 {
 		sb.WriteString(" segment-routing srv6\n")
 	}
 
 	sb.WriteString("!\n")
-
-	// SRv6 locator + static SID (End behavior)
-	if w.Topology.SRv6 {
-		locatorName := sw.Name
-		locatorPrefix := topo.LocatorPrefixForASN(sw.ASN)
-		vtepBare := topo.VtepBareAddr(sw.VtepAddr)
-
-		sb.WriteString("segment-routing\n")
-		sb.WriteString(" srv6\n")
-		sb.WriteString("  locators\n")
-		sb.WriteString(fmt.Sprintf("   locator %s\n", locatorName))
-		sb.WriteString(fmt.Sprintf("    prefix %s\n", locatorPrefix))
-		sb.WriteString("  static-sids\n")
-		sb.WriteString(fmt.Sprintf("   sid %s/128 locator %s behavior uN\n", vtepBare, locatorName))
-		sb.WriteString("!\n")
-	}
 
 	sb.WriteString("line vty\n")
 	sb.WriteString("!\n")
@@ -553,14 +564,16 @@ func (w *Writer) writeSRv6Routes() error {
 
 		// Seg6 routes to every remote switch's overlay prefix.
 		// Each route: dest = remote overlay /64, SRH = [remote VTEP]
-		// The outer IPv6 dst (remote VTEP) is forwarded by the BGP underlay.
+		// dev Loopback0 marks the route as local; the kernel still performs
+		// a FIB lookup for the outer dst (remote VTEP) and uses BGP ECMP
+		// nexthops to forward the encapsulated packet.
 		for _, other := range w.Topology.Switches {
 			if other.Name == sw.Name {
 				continue
 			}
 			remoteVTEP := topo.VtepBareAddr(other.VtepAddr)
 			sb.WriteString(fmt.Sprintf(
-				"ip -6 route add %s encap seg6 mode encap segs %s 2>/dev/null || true\n",
+				"ip -6 route add %s encap seg6 mode encap segs %s dev Loopback0 2>/dev/null || true\n",
 				other.OverlayPrefix, remoteVTEP,
 			))
 		}
