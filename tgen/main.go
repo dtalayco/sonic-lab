@@ -45,6 +45,7 @@ func main() {
 	links := fs.Int("links", 1, "parallel links per switch pair (for ECMP)")
 	hosts := fs.Int("h", 0, "number of hosts attached to each switch")
 	ports := fs.Int("p", 1, "number of ports per host (each port maps to a different switch)")
+	srv6 := fs.Bool("srv6", false, "enable SRv6 overlay (locators, SIDs, seg6 routes)")
 
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), `tgen — SONiC virtual lab topology generator
@@ -66,6 +67,9 @@ Hosts (optional):
   -h <int>    Number of hosts attached to each switch
   -p <int>    Number of ports per host (default 1; each port maps to a
               different switch for redundancy)
+
+Overlay (optional):
+  -srv6       Enable SRv6 overlay (locators, SIDs, seg6 kernel routes)
 
 Output:
   -o <dir>    Output directory (default ".", must be a direct child of repo root)
@@ -91,6 +95,7 @@ Examples:
 		Links:          *links,
 		HostsPerSwitch: *hosts,
 		PortsPerHost:   *ports,
+		SRv6:           *srv6,
 	}
 
 	if opts.Mesh && opts.Ring {

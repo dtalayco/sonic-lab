@@ -270,3 +270,197 @@ func TestWriteFRRConfigs_Content(t *testing.T) {
 		t.Error("missing 'line vty'")
 	}
 }
+
+func TestSRv6_FRRConfig(t *testing.T) {
+	tt := mustGenerate(t, topo.Options{Spines: 1, Leaves: 2, SRv6: true})
+	dir := t.TempDir()
+	w := New(dir, tt)
+
+	if err := w.writeFRRConfigs(); err != nil {
+		t.Fatalf("writeFRRConfigs error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "frr", "spine1.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := string(data)
+
+	// Verify SRv6 section is present
+	if !strings.Contains(cfg, "segment-routing") {
+		t.Error("missing 'segment-routing' section")
+	}
+	if !strings.Contains(cfg, "srv6") {
+		t.Error("missing 'srv6' sub-section")
+	}
+	if !strings.Contains(cfg, "locator spine1") {
+		t.Error("missing 'locator spine1'")
+	}
+	if !strings.Contains(cfg, "prefix fd00:0:0:fde8::/64") {
+		t.Error("missing locator prefix fd00:0:0:fde8::/64")
+	}
+	if !strings.Contains(cfg, "behavior uN") {
+		t.Error("missing 'behavior uN' (End SID)")
+	}
+	if !strings.Contains(cfg, "segment-routing srv6") {
+		t.Error("missing 'segment-routing srv6' in BGP section")
+	}
+}
+
+func TestSRv6_FRRConfig_Disabled(t *testing.T) {
+	tt := mustGenerate(t, topo.Options{Spines: 1, Leaves: 2, SRv6: false})
+	dir := t.TempDir()
+	w := New(dir, tt)
+
+	if err := w.writeFRRConfigs(); err != nil {
+		t.Fatalf("writeFRRConfigs error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "frr", "spine1.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := string(data)
+
+	// Verify SRv6 section is NOT present
+	if strings.Contains(cfg, "segment-routing") {
+		t.Error("should not contain 'segment-routing' when SRv6 is disabled")
+	}
+}
+
+func TestSRv6_Routes(t *testing.T) {
+	tt := mustGenerate(t, topo.Options{Spines: 1, Leaves: 2, SRv6: true})
+	dir := t.TempDir()
+	w := New(dir, tt)
+
+	if err := w.writeSRv6Routes(); err != nil {
+		t.Fatalf("writeSRv6Routes error: %v", err)
+	}
+
+	// Verify route file exists for spine1
+	data, err := os.ReadFile(filepath.Join(dir, "srv6", "spine1.routes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes := string(data)
+
+	// Verify overlay prefix is added to Loopback0
+	if !strings.Contains(routes, "2001:db8:fde8::1/128") {
+		t.Error("missing overlay prefix /128 on Loopback0")
+	}
+
+	// Verify seg6 routes to remote VTEPs
+	if !strings.Contains(routes, "encap seg6 mode encap segs") {
+		t.Error("missing seg6 encap syntax")
+	}
+	// spine1 (ASN 65000) should have routes to leaf1 (ASN 65100) and leaf2 (ASN 65101)
+	if !strings.Contains(routes, "2001:db8:fe4c::/64") {
+		t.Error("missing route to leaf1 overlay prefix")
+	}
+	if !strings.Contains(routes, "fd00:0:0:fe4c::1") {
+		t.Error("missing leaf1 VTEP as SRH segment")
+	}
+	if !strings.Contains(routes, "2001:db8:fe4d::/64") {
+		t.Error("missing route to leaf2 overlay prefix")
+	}
+	if !strings.Contains(routes, "fd00:0:0:fe4d::1") {
+		t.Error("missing leaf2 VTEP as SRH segment")
+	}
+	// Should NOT have a route to itself
+	if strings.Contains(routes, "2001:db8:fde8::/64 encap") {
+		t.Error("should not have seg6 route to own overlay prefix")
+	}
+}
+
+func TestSRv6_Routes_Mesh(t *testing.T) {
+	tt := mustGenerate(t, topo.Options{Mesh: true, Nodes: 3, SRv6: true})
+	dir := t.TempDir()
+	w := New(dir, tt)
+
+	if err := w.writeSRv6Routes(); err != nil {
+		t.Fatalf("writeSRv6Routes error: %v", err)
+	}
+
+	// In a mesh of 3, node1 should have routes to node2 and node3
+	data, err := os.ReadFile(filepath.Join(dir, "srv6", "node1.routes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes := string(data)
+
+	// node1 ASN = 65000, node2 ASN = 65001, node3 ASN = 65002
+	if !strings.Contains(routes, "fd00:0:0:fde9::1") {
+		t.Error("missing node2 VTEP as SRH segment")
+	}
+	if !strings.Contains(routes, "fd00:0:0:fdea::1") {
+		t.Error("missing node3 VTEP as SRH segment")
+	}
+	// Should not route to itself
+	if strings.Contains(routes, "fd00:0:0:fde8::1 encap") {
+		t.Error("should not have seg6 route to own VTEP")
+	}
+}
+
+func TestSRv6_ComposeMount(t *testing.T) {
+	tt := mustGenerate(t, topo.Options{Spines: 1, Leaves: 1, SRv6: true})
+	dir := t.TempDir()
+	w := New(dir, tt)
+
+	if err := w.writeCompose(); err != nil {
+		t.Fatalf("writeCompose error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := string(data)
+
+	if !strings.Contains(compose, "./srv6/spine1.routes:/srv6.routes:ro") {
+		t.Error("missing srv6 routes volume mount for spine1")
+	}
+	if !strings.Contains(compose, "./srv6/leaf1.routes:/srv6.routes:ro") {
+		t.Error("missing srv6 routes volume mount for leaf1")
+	}
+}
+
+func TestSRv6_ComposeMount_Disabled(t *testing.T) {
+	tt := mustGenerate(t, topo.Options{Spines: 1, Leaves: 1, SRv6: false})
+	dir := t.TempDir()
+	w := New(dir, tt)
+
+	if err := w.writeCompose(); err != nil {
+		t.Fatalf("writeCompose error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := string(data)
+
+	if strings.Contains(compose, "./srv6/") {
+		t.Error("should not contain srv6 volume mounts when SRv6 is disabled")
+	}
+}
+
+func TestSRv6_EntryScript(t *testing.T) {
+	tt := mustGenerate(t, topo.Options{Spines: 1, Leaves: 1, SRv6: true})
+	dir := t.TempDir()
+	w := New(dir, tt)
+
+	if err := w.writeEntryScript(); err != nil {
+		t.Fatalf("writeEntryScript error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "sonic_entry.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(data)
+
+	// The entry script should conditionally execute /srv6.routes
+	if !strings.Contains(script, "/srv6.routes") {
+		t.Error("missing /srv6.routes execution in entry script")
+	}
+}

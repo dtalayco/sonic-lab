@@ -36,8 +36,19 @@ if [ -n "$VTEP" ]; then
     ip link set Loopback0 up
     echo "Loopback0 created with VTEP address $VTEP"
 
-    # Bring up all Ethernet* interfaces BEFORE starting bgpd.
-    # Zebra must see them as UP before bgpd connects, otherwise
+    # Set admin up in SONiC CONFIG_DB for all Ethernet interfaces.
+    # This tells orchagent to program the port; required for the
+    # interface to show as "up" in "show interfaces status".
+    for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep '^Ethernet'); do
+        config interface startup "$iface" 2>/dev/null || true
+    done
+    echo "Set admin up for Ethernet interfaces"
+
+    # Wait for orchagent to process the admin-up requests.
+    sleep 5
+
+    # Bring up all Ethernet* interfaces in the kernel BEFORE starting
+    # bgpd. Zebra must see them as UP before bgpd connects, otherwise
     # bgpd crashes when reading the config with unnumbered neighbors.
     for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep '^Ethernet'); do
         ip link set "$iface" up 2>/dev/null || true
@@ -65,6 +76,13 @@ if [ -n "$VTEP" ]; then
     echo "Loading FRR configuration..."
     vtysh -f /tmp/frr.conf || echo "WARNING: vtysh -f returned non-zero"
     echo "FRR configuration loaded"
+
+    # If SRv6 routes file is present, execute it to program kernel seg6 routes.
+    if [ -f /srv6.routes ]; then
+        echo "Loading SRv6 overlay routes..."
+        bash /srv6.routes || echo "WARNING: SRv6 routes script returned non-zero"
+        echo "SRv6 overlay routes loaded"
+    fi
 fi
 
 # Keep the container alive by waiting on supervisord.

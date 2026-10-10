@@ -743,3 +743,99 @@ func TestLinks_DefaultToOne(t *testing.T) {
 		t.Fatalf("Links = %d, want 4 (default 1 per pair)", len(tt.Links))
 	}
 }
+
+func TestLocatorPrefixForASN(t *testing.T) {
+	tests := []struct {
+		asn  int
+		want string
+	}{
+		{65000, "fd00:0:0:fde8::/64"},
+		{65001, "fd00:0:0:fde9::/64"},
+		{65100, "fd00:0:0:fe4c::/64"},
+		{1, "fd00:0:0:1::/64"},
+	}
+	for _, tc := range tests {
+		if got := LocatorPrefixForASN(tc.asn); got != tc.want {
+			t.Errorf("LocatorPrefixForASN(%d) = %q, want %q", tc.asn, got, tc.want)
+		}
+	}
+}
+
+func TestOverlayPrefixForASN(t *testing.T) {
+	tests := []struct {
+		asn  int
+		want string
+	}{
+		{65000, "2001:db8:fde8::/64"},
+		{65001, "2001:db8:fde9::/64"},
+		{65100, "2001:db8:fe4c::/64"},
+		{1, "2001:db8:1::/64"},
+	}
+	for _, tc := range tests {
+		if got := OverlayPrefixForASN(tc.asn); got != tc.want {
+			t.Errorf("OverlayPrefixForASN(%d) = %q, want %q", tc.asn, got, tc.want)
+		}
+	}
+}
+
+func TestVtepBareAddr(t *testing.T) {
+	tests := []struct {
+		addr string
+		want string
+	}{
+		{"fd00:0:0:fde8::1/128", "fd00:0:0:fde8::1"},
+		{"fd00:0:0:fe4c::1/128", "fd00:0:0:fe4c::1"},
+		{"fd00:0:0:1::1/128", "fd00:0:0:1::1"},
+	}
+	for _, tc := range tests {
+		if got := VtepBareAddr(tc.addr); got != tc.want {
+			t.Errorf("VtepBareAddr(%q) = %q, want %q", tc.addr, got, tc.want)
+		}
+	}
+}
+
+func TestSRv6_TopologyFlag(t *testing.T) {
+	// SRv6 disabled (default)
+	tt := mustGenerate(t, Options{Spines: 1, Leaves: 2, SRv6: false})
+	if tt.SRv6 {
+		t.Error("SRv6 = true, want false when flag is not set")
+	}
+	for _, sw := range tt.Switches {
+		if sw.OverlayPrefix != "" {
+			t.Errorf("%s.OverlayPrefix = %q, want empty when SRv6 disabled", sw.Name, sw.OverlayPrefix)
+		}
+	}
+
+	// SRv6 enabled
+	tt = mustGenerate(t, Options{Spines: 1, Leaves: 2, SRv6: true})
+	if !tt.SRv6 {
+		t.Error("SRv6 = false, want true when flag is set")
+	}
+	for _, sw := range tt.Switches {
+		want := OverlayPrefixForASN(sw.ASN)
+		if sw.OverlayPrefix != want {
+			t.Errorf("%s.OverlayPrefix = %q, want %q", sw.Name, sw.OverlayPrefix, want)
+		}
+	}
+}
+
+func TestSRv6_Mesh(t *testing.T) {
+	tt := mustGenerate(t, Options{Mesh: true, Nodes: 3, SRv6: true})
+	if !tt.SRv6 {
+		t.Fatal("SRv6 = false, want true")
+	}
+	if len(tt.Switches) != 3 {
+		t.Fatalf("Switches = %d, want 3", len(tt.Switches))
+	}
+	// Each node should have a unique overlay prefix
+	seen := make(map[string]bool)
+	for _, sw := range tt.Switches {
+		if sw.OverlayPrefix == "" {
+			t.Errorf("%s.OverlayPrefix is empty", sw.Name)
+		}
+		if seen[sw.OverlayPrefix] {
+			t.Errorf("duplicate overlay prefix %q", sw.OverlayPrefix)
+		}
+		seen[sw.OverlayPrefix] = true
+	}
+}

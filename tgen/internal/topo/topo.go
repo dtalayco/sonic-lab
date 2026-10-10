@@ -25,15 +25,17 @@ type Topology struct {
 	Switches []Switch
 	Hosts    []Host
 	Links    []Link
+	SRv6     bool // enable SRv6 overlay generation
 }
 
 // Switch represents a single SONiC virtual switch.
 type Switch struct {
-	Name     string
-	Role     string // "spine", "leaf", or "node"
-	ASN      int
-	VtepAddr string // VTEP IPv6 ULA loopback address (e.g. fd00:0:0:fd98::1/128)
-	Ports    []string
+	Name          string
+	Role          string // "spine", "leaf", or "node"
+	ASN           int
+	VtepAddr      string // VTEP IPv6 ULA loopback address (e.g. fd00:0:0:fd98::1/128)
+	OverlayPrefix string // SRv6 overlay service prefix (e.g. 2001:db8:fd98::/64)
+	Ports         []string
 }
 
 // Host represents a simulated host container attached to one or more switches.
@@ -64,6 +66,7 @@ type Options struct {
 	Links           int  // -links: parallel links per switch pair (default 1)
 	HostsPerSwitch  int  // -h: number of hosts attached to each switch
 	PortsPerHost    int  // -p: number of ports per host (default 1)
+	SRv6            bool // -srv6: enable SRv6 overlay generation
 }
 
 // MaxPorts is the maximum number of ports available per switch
@@ -81,6 +84,25 @@ func portName(index int) string {
 // Only 2-byte ASNs (0-65535) are supported, which covers all lab use cases.
 func VtepAddrForASN(asn int) string {
 	return fmt.Sprintf("fd00:0:0:%x::1/128", asn)
+}
+
+// LocatorPrefixForASN returns the SRv6 locator /64 prefix derived from the
+// switch's ASN. Scheme: fd00:0:0:<asn>::/64.
+func LocatorPrefixForASN(asn int) string {
+	return fmt.Sprintf("fd00:0:0:%x::/64", asn)
+}
+
+// OverlayPrefixForASN returns the SRv6 overlay service /64 prefix derived
+// from the switch's ASN. Uses IPv6 documentation space (2001:db8::/32).
+// Scheme: 2001:db8:<asn>::/64.
+func OverlayPrefixForASN(asn int) string {
+	return fmt.Sprintf("2001:db8:%x::/64", asn)
+}
+
+// VtepBareAddr returns the VTEP address without the /128 prefix length.
+// E.g. "fd00:0:0:fde8::1/128" → "fd00:0:0:fde8::1"
+func VtepBareAddr(vtepAddr string) string {
+	return vtepAddr[:len(vtepAddr)-4] // strip "/128"
 }
 
 // Generate builds a Topology from the given Options.
@@ -135,6 +157,14 @@ func Generate(opts Options) (*Topology, error) {
 	if opts.HostsPerSwitch > 0 {
 		if err := addHosts(t, opts.HostsPerSwitch, opts.PortsPerHost); err != nil {
 			return nil, err
+		}
+	}
+
+	// Set SRv6 flag and overlay prefixes
+	t.SRv6 = opts.SRv6
+	if opts.SRv6 {
+		for i := range t.Switches {
+			t.Switches[i].OverlayPrefix = OverlayPrefixForASN(t.Switches[i].ASN)
 		}
 	}
 
