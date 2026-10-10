@@ -173,6 +173,30 @@ go test ./...
 - `pid: "host"` (access to network namespaces of other containers)
 - `/var/run/docker.sock` mounted (for `nsenter` into switch namespaces)
 
+## SRv6 Kernel Requirements
+
+When using `-srv6` in tgen, the host kernel must have segment routing (seg6)
+lwtunnel support enabled:
+
+```
+CONFIG_IPV6_SEG6_LWTUNNEL=y
+CONFIG_IPV6_SEG6_HMAC=y      (optional, for HMAC-SRv6)
+CONFIG_IPV6_SEG6_BPF=y       (optional, for BPF-based seg6)
+```
+
+**Colima** (the recommended macOS VM provider) ships with kernel 6.8.0 which
+includes all three as built-in. No module loading or kernel rebuild is needed.
+
+To verify on your host:
+
+```bash
+# Check if seg6 lwtunnel is available (should print "seg6")
+ip -6 route add 2001:db8::/64 encap seg6 mode encap segs 2001:db8::1 dev lo 2>&1 | grep -v "Operation not supported" && echo "seg6 OK"
+```
+
+No special Docker image is required — the stock `docker-sonic-vs:latest`
+includes iproute2 6.1.0 which fully supports seg6 lwtunnel route syntax.
+
 ## eBPF Program
 
 The BPF program (`bpf/patch_panel.c`) is a TC ingress classifier that:

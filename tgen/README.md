@@ -19,8 +19,10 @@ tgen [flags]
 | `-m` | Generate full mesh topology |
 | `-r` | Generate ring topology |
 | `-n <int>` | Number of nodes (for `-m` or `-r`) |
+| `-links <int>` | Parallel links per switch pair (default 1; enables ECMP) |
 | `-h <int>` | Number of hosts attached to each switch |
 | `-p <int>` | Number of ports per host (default 1; each port maps to a different switch) |
+| `-srv6` | Enable SRv6 overlay (locators, SIDs, seg6 kernel routes) |
 | `-o <dir>` | Output directory (default `.`, must be a direct child of repo root) |
 
 ### Examples
@@ -37,6 +39,12 @@ go run . -m -n 5 -o ../mesh-lab/
 
 # Ring: 8 nodes in a circular loop
 go run . -r -n 8 -o ../ring-lab/
+
+# Spine-leaf with ECMP: 2 spines, 4 leaves, 4 parallel links per pair
+go run . -s 2 -l 4 -links 4 -o ../ecmp/
+
+# Spine-leaf with SRv6 overlay
+go run . -s 2 -l 4 -srv6 -o ../srv6-lab/
 
 # Spine-leaf with hosts: 2 spines, 2 leaves, 2 hosts per switch, 2 ports per host
 go run . -s 2 -l 2 -h 2 -p 2 -o ../lab-with-hosts/
@@ -61,7 +69,10 @@ Hosts are built from `Dockerfile.host` (a small Debian image with
    - `docker-compose.yml` — defines webmesh, backing Linux containers, and SONiC containers
    - `topology.yml` — the desired topology in the YAML format webmesh expects
    - `init_linux.sh` — backing container entrypoint (touches vnet-ready file)
-   - `sonic_entry.sh` — SONiC container entrypoint (waits for vnet, starts supervisord)
+   - `sonic_entry.sh` — SONiC container entrypoint (waits for vnet, starts supervisord,
+     creates Loopback0, loads FRR config, optionally loads SRv6 routes)
+   - `frr/<switch>.conf` — per-switch FRR configuration (BGP unnumbered + optional SRv6)
+   - `srv6/<switch>.routes` — per-switch seg6 kernel routes (only when `-srv6`)
    - `start.sh` — convenience script to build and launch everything
    - `tmp/vnet_ready/` — shared directory for readiness signaling
 
@@ -101,16 +112,61 @@ Every switch gets an eBGP ASN and a deterministic VTEP IPv6 ULA loopback
 address (`fd00:0:0:<asn>::1/128`). The generated `frr/<switch>.conf`
 file configures FRR with:
 
-- **Loopback0** — the VTEP address, created by `sonic_entry.sh` before
-  supervisord starts
+- **Loopback0** — the VTEP address, created by `sonic_entry.sh` as a
+  dummy interface before BGP starts
 - **BGP unnumbered** — one neighbor per switch-to-switch link, using the
-  kernel interface name (`eth0`, `eth1`, …) with the `unnumbered` keyword
-  (sessions established over link-local)
-- **IPv6 address family** — each switch advertises its VTEP `/128` prefix
+  kernel interface name (`Ethernet0`, `Ethernet4`, …) with the `interface`
+  keyword and a shared `TRANSIT` peer-group (sessions established over
+  link-local; `ebgp-multihop` suppresses TTL check)
+- **IPv6 address family** — each switch advertises its VTEP `/128` prefix;
+  `next-hop-self` is set for multipath
 
 Host connections are excluded from the BGP neighbor list. The FRR config
-is mounted at `/etc/frr/frr.conf` inside each SONiC container; FRR picks
-it up on startup via supervisord.
+is mounted at `/tmp/frr.conf` (read-only) inside each SONiC container and
+loaded explicitly via `vtysh -f` after `bgpd` is running.
+
+### SRv6 Overlay (`-srv6`)
+
+When `-srv6` is specified, tgen adds an SRv6 overlay on top of the BGP
+unnumbered underlay. The address scheme is:
+
+| Purpose | Prefix | Interface |
+|---------|--------|-----------|
+| VTEP (End SID) | `fd00:0:0:<asn>::1/128` | Loopback0 |
+| Locator | `fd00:0:0:<asn>::/64` | (FRR only) |
+| Overlay service | `2001:db8:<asn>::/64` | Loopback0 |
+
+Per-switch artifacts:
+
+- **FRR config** adds a `segment-routing srv6` block with a locator and a
+  static End SID (`behavior uN`), plus `segment-routing srv6` inside the
+  BGP router section (enables SID advertisement/distribution).
+- **`srv6/<name>.routes`** — a shell script that:
+  1. Adds the overlay `/128` to Loopback0
+  2. Programs a seg6 kernel route for each remote switch's overlay prefix:
+     ```
+     ip -6 route add <remote-overlay>/64 encap seg6 mode encap segs <remote-vtep>
+     ```
+     The single-segment SRH (remote VTEP = End behavior) causes the kernel
+     to encapsulate the packet with an outer IPv6 header destined to the
+     remote VTEP. The BGP underlay routes the outer packet; the remote
+     switch decapsulates and delivers the inner packet to its own Loopback0.
+
+The routes file is mounted at `/srv6.routes` (read-only) and executed by
+`sonic_entry.sh` after the FRR config loads.
+
+**Verifying the data plane:**
+
+```bash
+# From any switch, ping the remote switch's overlay address:
+docker exec sonic-leaf1 ping6 -c 3 2001:db8:fe4d::1
+# 0% packet loss confirms seg6 encapsulation + decapsulation end-to-end.
+```
+
+**Kernel requirement:** The host kernel must have `CONFIG_IPV6_SEG6_LWTUNNEL=y`
+(built-in or module). Colima's 6.8.0 kernel includes it. No special Docker
+image is needed — stock `docker-sonic-vs:latest` (iproute2 6.1.0) supports
+seg6 lwtunnel routes.
 
 ### Build
 
