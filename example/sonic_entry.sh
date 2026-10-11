@@ -77,8 +77,20 @@ if [ -n "$VTEP" ]; then
     vtysh -f /tmp/frr.conf || echo "WARNING: vtysh -f returned non-zero"
     echo "FRR configuration loaded"
 
-    # If SRv6 routes file is present, execute it to program kernel seg6 routes.
+    # If SRv6 routes file is present, enable seg6 on all interfaces and
+    # execute the routes script to program kernel seg6 routes.
     if [ -f /srv6.routes ]; then
+        # Enable SRv6 segment routing on all interfaces (Ethernet* and
+        # Loopback0). The kernel default is 0, and setting it on "all"
+        # does not propagate to already-created interfaces, so we must
+        # set it explicitly on each one. This is REQUIRED for seg6
+        # decapsulation: without it, the receiver silently drops
+        # seg6-encapsulated packets.
+        for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -E '^(Ethernet|Loopback)'); do
+            echo 1 > "/proc/sys/net/ipv6/conf/$iface/seg6_enabled" 2>/dev/null || true
+        done
+        echo "Enabled seg6_enabled=1 on all interfaces"
+
         echo "Loading SRv6 overlay routes..."
         bash /srv6.routes || echo "WARNING: SRv6 routes script returned non-zero"
         echo "SRv6 overlay routes loaded"

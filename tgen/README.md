@@ -173,23 +173,17 @@ docker exec sonic-leaf1 vtysh -c "show ipv6 bgp" | grep "fd00:0:0"
 docker exec sonic-leaf1 ping6 -c 3 2001:db8:fe4d::1
 ```
 
-> **Known limitation (Colima 6.8 HWE kernel):** Cross-namespace seg6
-> decapsulation is silently dropped in this environment. Packets arrive at
-> the receiving interface (confirmed via `tcpdump -i Ethernet12`) but the
-> kernel's seg6 input path drops them without incrementing any standard
-> counter (`Ip6InDelivers`, `Ip6InDiscards`, `Ip6InHdrErrors` all remain
-> zero). Setting `seg6_enabled=1` on all Ethernet interfaces does not fix
-> it. The root cause is believed to be a restriction or bug in the Ubuntu
-> 24.04 HWE kernel (6.8.0-64-generic) when processing seg6-encapsulated
-> packets received on veth interfaces from a different network namespace.
+> **`seg6_enabled=1` is required on all interfaces.** The kernel's default
+> for `seg6_enabled` is `0`, and setting it on the `all` pseudo-interface
+> does not propagate to already-created interfaces. The `sonic_entry.sh`
+> script sets `seg6_enabled=1` explicitly on every `Ethernet*` and
+> `Loopback0` interface before loading seg6 routes. Without this, the
+> receiving kernel silently drops seg6-encapsulated packets (no counter
+> increment, no error) — the decapsulation path is simply disabled.
 >
-> Local seg6 (same namespace, Loopback0→Loopback0) and in-container veth
-> seg6 both work correctly. The sender side (encapsulation + ECMP
-> distribution across parallel links) is confirmed working.
->
-> If you run on a different kernel (e.g., mainline 6.8 with ftrace enabled,
-> or a Linux VM with full tracing), the data plane may work. Test with:
-> `ip seg6local add dev Loopback0 mode end` on the receiver, then ping.
+> The SRv6 data plane (encap + decap across namespaces) is fully working
+> in the Colima 6.8 HWE kernel environment when `seg6_enabled=1` is set
+> on all interfaces on all switches.
 
 **Kernel requirement:** The host kernel must have `CONFIG_IPV6_SEG6_LWTUNNEL=y`
 (built-in or module). Colima's 6.8.0 kernel includes it. No special Docker
