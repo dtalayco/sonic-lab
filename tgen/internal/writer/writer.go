@@ -367,12 +367,12 @@ if [ -n "$VTEP" ]; then
     # If SRv6 routes file is present, enable seg6 on all interfaces and
     # execute the routes script to program kernel seg6 routes.
     if [ -f /srv6.routes ]; then
-        # Enable SRv6 segment routing on all interfaces (Ethernet* and
-        # Loopback0). The kernel default is 0, and setting it on "all"
-        # does not propagate to already-created interfaces, so we must
-        # set it explicitly on each one. This is REQUIRED for seg6
-        # decapsulation: without it, the receiver silently drops
-        # seg6-encapsulated packets.
+        # Enable SRv6 segment routing. The kernel default for seg6_enabled
+        # is 0. Setting it on "all"/"default" covers future interfaces but
+        # does NOT propagate to already-created ones, so we also set it
+        # explicitly on each existing interface below.
+        sysctl -w net.ipv6.conf.all.seg6_enabled=1 2>/dev/null || true
+        sysctl -w net.ipv6.conf.default.seg6_enabled=1 2>/dev/null || true
         for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -E '^(Ethernet|Loopback)'); do
             echo 1 > "/proc/sys/net/ipv6/conf/$iface/seg6_enabled" 2>/dev/null || true
         done
@@ -519,9 +519,14 @@ func (w *Writer) generateFRRConfig(sw topo.Switch) string {
 	sb.WriteString("  neighbor TRANSIT next-hop-self\n")
 	sb.WriteString(" exit-address-family\n")
 
-	// SRv6 in BGP (SID distribution via BGP)
+	// SRv6 in BGP (SID distribution via BGP).
+	// The locator sub-command links the named locator to the BGP process
+	// so BGP knows which SIDs to advertise. Without it, FRR 10.x will not
+	// distribute SIDs even if the segment-routing block is present.
 	if w.Topology.SRv6 {
 		sb.WriteString(" segment-routing srv6\n")
+		sb.WriteString(fmt.Sprintf("  locator %s\n", sw.Name))
+		sb.WriteString(" !\n")
 	}
 
 	sb.WriteString("!\n")
