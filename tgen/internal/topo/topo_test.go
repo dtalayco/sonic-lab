@@ -819,6 +819,23 @@ func TestSRv6_TopologyFlag(t *testing.T) {
 	}
 }
 
+func TestSidAddrForASN(t *testing.T) {
+	tests := []struct {
+		asn  int
+		want string
+	}{
+		{65000, "fd00:0:0:fde8::100"},
+		{65100, "fd00:0:0:fe4c::100"},
+		{65101, "fd00:0:0:fe4d::100"},
+		{1, "fd00:0:0:1::100"},
+	}
+	for _, tc := range tests {
+		if got := SidAddrForASN(tc.asn); got != tc.want {
+			t.Errorf("SidAddrForASN(%d) = %q, want %q", tc.asn, got, tc.want)
+		}
+	}
+}
+
 func TestSRv6_Mesh(t *testing.T) {
 	tt := mustGenerate(t, Options{Mesh: true, Nodes: 3, SRv6: true})
 	if !tt.SRv6 {

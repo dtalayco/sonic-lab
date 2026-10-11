@@ -105,6 +105,15 @@ func VtepBareAddr(vtepAddr string) string {
 	return vtepAddr[:len(vtepAddr)-4] // strip "/128"
 }
 
+// SidAddrForASN returns the SRv6 End SID (uN behavior) as a bare IPv6
+// address derived from the switch's ASN. Scheme: fd00:0:0:<asn>::100.
+// This is deliberately distinct from the VTEP address (::1) to avoid a
+// collision with the loopback interface address. The SID must be a
+// locally-assigned address for the kernel to perform seg6 decapsulation.
+func SidAddrForASN(asn int) string {
+	return fmt.Sprintf("fd00:0:0:%x::100", asn)
+}
+
 // Generate builds a Topology from the given Options.
 func Generate(opts Options) (*Topology, error) {
 	// Default to 1 link per pair if not specified

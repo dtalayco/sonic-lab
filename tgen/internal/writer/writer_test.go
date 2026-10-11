@@ -59,6 +59,11 @@ func TestGenerateFRRConfig_SpineLeaf(t *testing.T) {
 
 	cfg := w.generateFRRConfig(*spine)
 
+	// Should contain hostname
+	if !strings.Contains(cfg, "hostname spine1") {
+		t.Errorf("spine1 config missing 'hostname spine1'")
+	}
+
 	// Should contain the router bgp statement with correct ASN
 	if !strings.Contains(cfg, "router bgp 65000") {
 		t.Errorf("spine1 config missing 'router bgp 65000'")
@@ -99,9 +104,9 @@ func TestGenerateFRRConfig_SpineLeaf(t *testing.T) {
 		t.Errorf("spine1 config missing 'bgp bestpath as-path multipath-relax'")
 	}
 
-	// Should have IPv6 address family with activate and next-hop-self
-	if !strings.Contains(cfg, "address-family ipv6") {
-		t.Errorf("spine1 config missing 'address-family ipv6'")
+	// Should have IPv6 unicast address family with activate and next-hop-self
+	if !strings.Contains(cfg, "address-family ipv6 unicast") {
+		t.Errorf("spine1 config missing 'address-family ipv6 unicast'")
 	}
 	if !strings.Contains(cfg, "neighbor TRANSIT activate") {
 		t.Errorf("spine1 config missing 'neighbor TRANSIT activate'")
@@ -280,30 +285,78 @@ func TestSRv6_FRRConfig(t *testing.T) {
 		t.Fatalf("writeFRRConfigs error: %v", err)
 	}
 
+	// Spine should NOT have SRv6 (transit-only)
 	data, err := os.ReadFile(filepath.Join(dir, "frr", "spine1.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spineCfg := string(data)
+	if strings.Contains(spineCfg, "segment-routing") {
+		t.Error("spine1 should not contain 'segment-routing' (spines are transit-only)")
+	}
+	if strings.Contains(spineCfg, "vrf vrf100") {
+		t.Error("spine1 should not contain 'vrf vrf100'")
+	}
+	if strings.Contains(spineCfg, "address-family vpnv4") {
+		t.Error("spine1 should not contain 'address-family vpnv4'")
+	}
+
+	// Leaf should have full SRv6 config
+	data, err = os.ReadFile(filepath.Join(dir, "frr", "leaf1.conf"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg := string(data)
 
-	// Verify SRv6 section is present
+	// VRF
+	if !strings.Contains(cfg, "vrf vrf100") {
+		t.Error("leaf1 missing 'vrf vrf100'")
+	}
+	if !strings.Contains(cfg, "vni 100") {
+		t.Error("leaf1 missing 'vni 100'")
+	}
+
+	// SRv6 locator + static SID
 	if !strings.Contains(cfg, "segment-routing") {
-		t.Error("missing 'segment-routing' section")
+		t.Error("leaf1 missing 'segment-routing' section")
 	}
-	if !strings.Contains(cfg, "srv6") {
-		t.Error("missing 'srv6' sub-section")
+	if !strings.Contains(cfg, "locator leaf1") {
+		t.Error("leaf1 missing 'locator leaf1'")
 	}
-	if !strings.Contains(cfg, "locator spine1") {
-		t.Error("missing 'locator spine1'")
+	if !strings.Contains(cfg, "prefix fd00:0:0:fe4c::/64") {
+		t.Error("leaf1 missing locator prefix fd00:0:0:fe4c::/64")
 	}
-	if !strings.Contains(cfg, "prefix fd00:0:0:fde8::/64") {
-		t.Error("missing locator prefix fd00:0:0:fde8::/64")
+	if !strings.Contains(cfg, "fd00:0:0:fe4c::100/128") {
+		t.Error("leaf1 missing End SID fd00:0:0:fe4c::100/128")
 	}
 	if !strings.Contains(cfg, "behavior uN") {
-		t.Error("missing 'behavior uN' (End SID)")
+		t.Error("leaf1 missing 'behavior uN' (End SID)")
 	}
+
+	// BGP ipv6 unicast with locator /64 network
+	if !strings.Contains(cfg, "address-family ipv6 unicast") {
+		t.Error("leaf1 missing 'address-family ipv6 unicast'")
+	}
+	if !strings.Contains(cfg, "network fd00:0:0:fe4c::/64") {
+		t.Error("leaf1 missing 'network fd00:0:0:fe4c::/64' (locator /64 in BGP)")
+	}
+
+	// L3VPN address family
+	if !strings.Contains(cfg, "address-family vpnv4 unicast") {
+		t.Error("leaf1 missing 'address-family vpnv4 unicast'")
+	}
+
+	// SRv6 under BGP
 	if !strings.Contains(cfg, "segment-routing srv6") {
-		t.Error("missing 'segment-routing srv6' in BGP section")
+		t.Error("leaf1 missing 'segment-routing srv6' in BGP section")
+	}
+
+	// Per-VRF BGP instance
+	if !strings.Contains(cfg, "router bgp 65100 vrf vrf100") {
+		t.Error("leaf1 missing 'router bgp 65100 vrf vrf100'")
+	}
+	if !strings.Contains(cfg, "sid locator leaf1") {
+		t.Error("leaf1 missing 'sid locator leaf1' in VRF BGP")
 	}
 }
 
@@ -337,37 +390,47 @@ func TestSRv6_Routes(t *testing.T) {
 		t.Fatalf("writeSRv6Routes error: %v", err)
 	}
 
-	// Verify route file exists for spine1
-	data, err := os.ReadFile(filepath.Join(dir, "srv6", "spine1.routes"))
+	// Spine should NOT have a route file (transit-only)
+	if _, err := os.ReadFile(filepath.Join(dir, "srv6", "spine1.routes")); err == nil {
+		t.Error("spine1 should not have an SRv6 route file (transit-only)")
+	}
+
+	// Leaf1 should have a route file
+	data, err := os.ReadFile(filepath.Join(dir, "srv6", "leaf1.routes"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	routes := string(data)
 
-	// Verify overlay prefix is added to Loopback0
-	if !strings.Contains(routes, "2001:db8:fde8::1/128") {
+	// Verify End SID is assigned to Loopback0
+	if !strings.Contains(routes, "fd00:0:0:fe4c::100/128") {
+		t.Error("missing End SID fd00:0:0:fe4c::100/128 on Loopback0")
+	}
+
+	// Verify overlay /128 is added to Loopback0
+	if !strings.Contains(routes, "2001:db8:fe4c::1/128") {
 		t.Error("missing overlay prefix /128 on Loopback0")
 	}
 
-	// Verify seg6 routes to remote VTEPs
+	// Verify seg6 encap syntax
 	if !strings.Contains(routes, "encap seg6 mode encap segs") {
 		t.Error("missing seg6 encap syntax")
 	}
-	// spine1 (ASN 65000) should have routes to leaf1 (ASN 65100) and leaf2 (ASN 65101)
-	if !strings.Contains(routes, "2001:db8:fe4c::/64") {
-		t.Error("missing route to leaf1 overlay prefix")
-	}
-	if !strings.Contains(routes, "fd00:0:0:fe4c::1") {
-		t.Error("missing leaf1 VTEP as SRH segment")
-	}
+
+	// leaf1 (ASN 65100) should have a route to leaf2 (ASN 65101)
+	// but NOT to spine1 (spines don't terminate SRv6)
 	if !strings.Contains(routes, "2001:db8:fe4d::/64") {
 		t.Error("missing route to leaf2 overlay prefix")
 	}
-	if !strings.Contains(routes, "fd00:0:0:fe4d::1") {
-		t.Error("missing leaf2 VTEP as SRH segment")
+	if !strings.Contains(routes, "fd00:0:0:fe4d::100") {
+		t.Error("missing leaf2 End SID as SRH segment")
+	}
+	// Should NOT have a route to spine1
+	if strings.Contains(routes, "2001:db8:fde8::/64") {
+		t.Error("should not have route to spine1 overlay prefix (spines don't terminate SRv6)")
 	}
 	// Should NOT have a route to itself
-	if strings.Contains(routes, "2001:db8:fde8::/64 encap") {
+	if strings.Contains(routes, "2001:db8:fe4c::/64 encap") {
 		t.Error("should not have seg6 route to own overlay prefix")
 	}
 }
@@ -389,15 +452,15 @@ func TestSRv6_Routes_Mesh(t *testing.T) {
 	routes := string(data)
 
 	// node1 ASN = 65000, node2 ASN = 65001, node3 ASN = 65002
-	if !strings.Contains(routes, "fd00:0:0:fde9::1") {
-		t.Error("missing node2 VTEP as SRH segment")
+	if !strings.Contains(routes, "fd00:0:0:fde9::100") {
+		t.Error("missing node2 End SID as SRH segment")
 	}
-	if !strings.Contains(routes, "fd00:0:0:fdea::1") {
-		t.Error("missing node3 VTEP as SRH segment")
+	if !strings.Contains(routes, "fd00:0:0:fdea::100") {
+		t.Error("missing node3 End SID as SRH segment")
 	}
 	// Should not route to itself
-	if strings.Contains(routes, "fd00:0:0:fde8::1 encap") {
-		t.Error("should not have seg6 route to own VTEP")
+	if strings.Contains(routes, "fd00:0:0:fde8::100 encap") {
+		t.Error("should not have seg6 route to own End SID")
 	}
 }
 
@@ -416,9 +479,11 @@ func TestSRv6_ComposeMount(t *testing.T) {
 	}
 	compose := string(data)
 
-	if !strings.Contains(compose, "./srv6/spine1.routes:/srv6.routes:ro") {
-		t.Error("missing srv6 routes volume mount for spine1")
+	// Spine should NOT have a srv6 routes mount (transit-only)
+	if strings.Contains(compose, "./srv6/spine1.routes:/srv6.routes:ro") {
+		t.Error("spine1 should not have a srv6 routes mount (transit-only)")
 	}
+	// Leaf1 should have the mount
 	if !strings.Contains(compose, "./srv6/leaf1.routes:/srv6.routes:ro") {
 		t.Error("missing srv6 routes volume mount for leaf1")
 	}
