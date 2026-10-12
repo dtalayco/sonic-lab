@@ -385,15 +385,15 @@ func (w *Writer) writeEntryScript() error {
 	fi
 
 	# Create overlay IPv4 loopback in VRF (SRv6 leaves only).
-	# This interface is bound to vrf100 and its /24 is redistributed
+	# This interface is bound to Vrf100 and its /24 is redistributed
 	# into BGP via the VRF BGP instance's 'redistribute connected'.
 	if [ -n "$OVERLAY_V4" ]; then
 	config vrf add Vrf100 2>/dev/null || true
 	config loopback add Loopback100 2>/dev/null || true
-	config interface vrf bind Loopback100 vrf100 2>/dev/null || true
+	config interface vrf bind Loopback100 Vrf100 2>/dev/null || true
 	config interface ip add Loopback100 "$OVERLAY_V4" 2>/dev/null || true
 	ip link set Loopback100 up 2>/dev/null || true
-	echo "Created Loopback100 in vrf100 with $OVERLAY_V4"
+	echo "Created Loopback100 in Vrf100 with $OVERLAY_V4"
 	config save -y 2>/dev/null || true
 	fi
 	fi
@@ -481,7 +481,7 @@ func (w *Writer) generateFRRConfig(sw topo.Switch) string {
 
 	// VRF definition (SRv6 leaves/nodes only).
 	if srv6 {
-		sb.WriteString("vrf vrf100\n")
+		sb.WriteString("vrf Vrf100\n")
 		sb.WriteString(" vni 100\n")
 		sb.WriteString("exit\n")
 		sb.WriteString("!\n")
@@ -575,7 +575,7 @@ func (w *Writer) generateFRRConfig(sw topo.Switch) string {
 
 	// Per-VRF BGP instance (SRv6 leaves/nodes only).
 	if srv6 {
-		sb.WriteString(fmt.Sprintf("router bgp %d vrf vrf100\n", sw.ASN))
+		sb.WriteString(fmt.Sprintf("router bgp %d vrf Vrf100\n", sw.ASN))
 		sb.WriteString(" !\n")
 		sb.WriteString(" address-family ipv4 unicast\n")
 		sb.WriteString("  redistribute connected\n")

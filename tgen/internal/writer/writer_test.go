@@ -294,8 +294,8 @@ func TestSRv6_FRRConfig(t *testing.T) {
 	if strings.Contains(spineCfg, "segment-routing") {
 		t.Error("spine1 should not contain 'segment-routing' (spines are transit-only)")
 	}
-	if strings.Contains(spineCfg, "vrf vrf100") {
-		t.Error("spine1 should not contain 'vrf vrf100'")
+	if strings.Contains(spineCfg, "vrf Vrf100") {
+		t.Error("spine1 should not contain 'vrf Vrf100'")
 	}
 	// Spines relay L3VPN between leaves
 	if !strings.Contains(spineCfg, "address-family ipv4 vpn") {
@@ -313,8 +313,8 @@ func TestSRv6_FRRConfig(t *testing.T) {
 	cfg := string(data)
 
 	// VRF
-	if !strings.Contains(cfg, "vrf vrf100") {
-		t.Error("leaf1 missing 'vrf vrf100'")
+	if !strings.Contains(cfg, "vrf Vrf100") {
+		t.Error("leaf1 missing 'vrf Vrf100'")
 	}
 	if !strings.Contains(cfg, "vni 100") {
 		t.Error("leaf1 missing 'vni 100'")
@@ -356,8 +356,8 @@ func TestSRv6_FRRConfig(t *testing.T) {
 	}
 
 	// Per-VRF BGP instance
-	if !strings.Contains(cfg, "router bgp 65100 vrf vrf100") {
-		t.Error("leaf1 missing 'router bgp 65100 vrf vrf100'")
+	if !strings.Contains(cfg, "router bgp 65100 vrf Vrf100") {
+		t.Error("leaf1 missing 'router bgp 65100 vrf Vrf100'")
 	}
 }
 
