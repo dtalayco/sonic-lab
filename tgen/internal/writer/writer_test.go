@@ -297,8 +297,12 @@ func TestSRv6_FRRConfig(t *testing.T) {
 	if strings.Contains(spineCfg, "vrf vrf100") {
 		t.Error("spine1 should not contain 'vrf vrf100'")
 	}
-	if strings.Contains(spineCfg, "address-family ipv4 vpn") {
-		t.Error("spine1 should not contain 'address-family ipv4 vpn'")
+	// Spines relay L3VPN between leaves
+	if !strings.Contains(spineCfg, "address-family ipv4 vpn") {
+		t.Error("spine1 should contain 'address-family ipv4 vpn' (for VPN relay)")
+	}
+	if !strings.Contains(spineCfg, "next-hop-self") {
+		t.Error("spine1 should have 'next-hop-self' in ipv4 vpn AF (for relay)")
 	}
 
 	// Leaf should have full SRv6 config

@@ -533,6 +533,17 @@ func (w *Writer) generateFRRConfig(sw topo.Switch) string {
 	sb.WriteString("  neighbor TRANSIT next-hop-self\n")
 	sb.WriteString(" exit-address-family\n")
 
+	// L3VPN relay (SRv6 spines only).
+	// Spines relay VPN routes between leaves; next-hop-self ensures
+	// re-advertised routes point back to the spine.
+	if w.Topology.SRv6 && isSpine {
+		sb.WriteString(" !\n")
+		sb.WriteString(" address-family ipv4 vpn\n")
+		sb.WriteString("  neighbor TRANSIT activate\n")
+		sb.WriteString("  neighbor TRANSIT next-hop-self\n")
+		sb.WriteString(" exit-address-family\n")
+	}
+
 	// L3VPN (SRv6 leaves/nodes only).
 	if srv6 {
 		sb.WriteString(" !\n")
