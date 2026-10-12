@@ -536,7 +536,7 @@ func (w *Writer) generateFRRConfig(sw topo.Switch) string {
 	// L3VPN + SRv6 SID distribution (SRv6 leaves/nodes only).
 	if srv6 {
 		sb.WriteString(" !\n")
-		sb.WriteString(" address-family vpnv4\n")
+		sb.WriteString(" address-family ipv4 vpn\n")
 		sb.WriteString("  neighbor TRANSIT activate\n")
 		sb.WriteString(" exit-address-family\n")
 		sb.WriteString(" !\n")

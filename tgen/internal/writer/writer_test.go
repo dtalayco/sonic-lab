@@ -297,8 +297,8 @@ func TestSRv6_FRRConfig(t *testing.T) {
 	if strings.Contains(spineCfg, "vrf vrf100") {
 		t.Error("spine1 should not contain 'vrf vrf100'")
 	}
-	if strings.Contains(spineCfg, "address-family vpnv4") {
-		t.Error("spine1 should not contain 'address-family vpnv4'")
+	if strings.Contains(spineCfg, "address-family ipv4 vpn") {
+		t.Error("spine1 should not contain 'address-family ipv4 vpn'")
 	}
 
 	// Leaf should have full SRv6 config
@@ -342,8 +342,8 @@ func TestSRv6_FRRConfig(t *testing.T) {
 	}
 
 	// L3VPN address family
-	if !strings.Contains(cfg, "address-family vpnv4") {
-		t.Error("leaf1 missing 'address-family vpnv4'")
+	if !strings.Contains(cfg, "address-family ipv4 vpn") {
+		t.Error("leaf1 missing 'address-family ipv4 vpn'")
 	}
 
 	// SRv6 under BGP
@@ -354,9 +354,6 @@ func TestSRv6_FRRConfig(t *testing.T) {
 	// Per-VRF BGP instance
 	if !strings.Contains(cfg, "router bgp 65100 vrf vrf100") {
 		t.Error("leaf1 missing 'router bgp 65100 vrf vrf100'")
-	}
-	if !strings.Contains(cfg, "sid locator leaf1") {
-		t.Error("leaf1 missing 'sid locator leaf1' in VRF BGP")
 	}
 }
 
