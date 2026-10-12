@@ -388,6 +388,7 @@ func (w *Writer) writeEntryScript() error {
 	# This interface is bound to vrf100 and its /24 is redistributed
 	# into BGP via the VRF BGP instance's 'redistribute connected'.
 	if [ -n "$OVERLAY_V4" ]; then
+	config vrf add Vrf100 2>/dev/null || true
 	config loopback add Loopback100 2>/dev/null || true
 	config interface vrf bind Loopback100 vrf100 2>/dev/null || true
 	config interface ip add Loopback100 "$OVERLAY_V4" 2>/dev/null || true
