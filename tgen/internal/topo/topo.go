@@ -35,6 +35,7 @@ type Switch struct {
 	ASN           int
 	VtepAddr      string // VTEP IPv6 ULA loopback address (e.g. fd00:0:0:fd98::1/128)
 	OverlayPrefix string // SRv6 overlay service prefix (e.g. 2001:db8:fd98::/64)
+	OverlayIPv4   string // IPv4 overlay address in VRF (e.g. 192.168.1.1/24)
 	Ports         []string
 }
 
@@ -114,6 +115,15 @@ func SidAddrForASN(asn int) string {
 	return fmt.Sprintf("fd00:0:0:%x::100", asn)
 }
 
+// OverlayIPv4ForASN returns a deterministic IPv4 /24 address for the
+// switch's VRF overlay interface. Scheme: 192.168.<asn-65100+1>.1/24.
+// Each non-spine switch gets a unique /24 so overlay pings work
+// leaf-to-leaf through the SRv6 fabric.
+func OverlayIPv4ForASN(asn int) string {
+	offset := asn - 65100 + 1
+	return fmt.Sprintf("192.168.%d.1/24", offset)
+}
+
 // Generate builds a Topology from the given Options.
 func Generate(opts Options) (*Topology, error) {
 	// Default to 1 link per pair if not specified
@@ -174,6 +184,9 @@ func Generate(opts Options) (*Topology, error) {
 	if opts.SRv6 {
 		for i := range t.Switches {
 			t.Switches[i].OverlayPrefix = OverlayPrefixForASN(t.Switches[i].ASN)
+			if t.Switches[i].Role != "spine" {
+				t.Switches[i].OverlayIPv4 = OverlayIPv4ForASN(t.Switches[i].ASN)
+			}
 		}
 	}
 

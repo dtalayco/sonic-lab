@@ -3,6 +3,7 @@
 
 	SWITCH="$1"
 	VTEP="${2:-}"
+	OVERLAY_V4="${3:-}"
 
 	echo "Waiting for vnet file /tmp/vnet_ready/$SWITCH"
 
@@ -94,6 +95,18 @@
 	echo "Loading SRv6 overlay routes..."
 	bash /srv6.routes || echo "WARNING: SRv6 routes script returned non-zero"
 	echo "SRv6 overlay routes loaded"
+	fi
+
+	# Create overlay IPv4 loopback in VRF (SRv6 leaves only).
+	# This interface is bound to vrf100 and its /24 is redistributed
+	# into BGP via the VRF BGP instance's 'redistribute connected'.
+	if [ -n "$OVERLAY_V4" ]; then
+	config loopback add Loopback100 2>/dev/null || true
+	config interface vrf bind Loopback100 vrf100 2>/dev/null || true
+	config interface ip add Loopback100 "$OVERLAY_V4" 2>/dev/null || true
+	ip link set Loopback100 up 2>/dev/null || true
+	echo "Created Loopback100 in vrf100 with $OVERLAY_V4"
+	config save -y 2>/dev/null || true
 	fi
 	fi
 
