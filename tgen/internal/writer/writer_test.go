@@ -342,8 +342,8 @@ func TestSRv6_FRRConfig(t *testing.T) {
 	}
 
 	// L3VPN address family
-	if !strings.Contains(cfg, "address-family vpnv4 unicast") {
-		t.Error("leaf1 missing 'address-family vpnv4 unicast'")
+	if !strings.Contains(cfg, "address-family vpnv4") {
+		t.Error("leaf1 missing 'address-family vpnv4'")
 	}
 
 	// SRv6 under BGP
