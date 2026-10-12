@@ -384,13 +384,18 @@ func (w *Writer) writeEntryScript() error {
 	echo "SRv6 overlay routes loaded"
 	fi
 
-	# Create overlay IPv4 VLAN interface in VRF (SRv6 leaves only).
-	# Uses a VLAN interface (Vlan100) because SONiC does not instantiate
-	# user-defined loopbacks in the kernel without a physical port behind
-	# them. A VLAN interface forces immediate kernel provisioning.
-	# The /24 is redistributed into BGP via the VRF's 'redistribute connected'.
+	# 1. First, create overlay IPv4 VLAN interface in VRF (SRv6 leaves only).
 	if [ -n "$OVERLAY_V4" ]; then
 	config vrf add Vrf100 2>/dev/null || true
+
+	# WAIT LOOP: Wait for the SONiC backend daemon to create the Linux kernel VRF device
+	echo "Waiting for Linux kernel to instantiate Vrf100..."
+	for i in {1..10}; do
+	if ip link show dev Vrf100 >/dev/null 2>&1 || ip link show dev vrf100 >/dev/null 2>&1; then
+	break
+	fi
+	sleep 1
+	done
 
 	# Clean up any stale loopback config from previous attempts
 	config interface vrf unbind Loopback100 2>/dev/null || true
@@ -398,9 +403,28 @@ func (w *Writer) writeEntryScript() error {
 
 	# Provision a VLAN interface as the overlay loopback
 	config vlan add 100 2>/dev/null || true
+
+	# WAIT LOOP: Wait for the SONiC backend daemon to create the Linux kernel Bridge interface
+	echo "Waiting for Linux kernel to instantiate Vlan100..."
+	for i in {1..10}; do
+	if ip link show dev Vlan100 >/dev/null 2>&1; then
+	break
+	fi
+	sleep 1
+	done
+
 	config interface vrf bind Vlan100 Vrf100 2>/dev/null || true
 	config interface ip add Vlan100 "$OVERLAY_V4" 2>/dev/null || true
 	config interface startup Vlan100 2>/dev/null || true
+
+	# =====================================================================
+	# CRITICAL CONTAINER FIX: Force the IP and link state directly into kernel 
+	# to bypass SONiC database sync dropping empty VLAN mappings.
+	# =====================================================================
+	ip addr add "$OVERLAY_V4" dev Vlan100 2>/dev/null || true
+	ip link set dev Vlan100 master Vrf100 2>/dev/null || ip link set dev Vlan100 master vrf100 2>/dev/null || true
+	ip link set dev Vlan100 up 2>/dev/null || true
+	# =====================================================================
 
 	echo "Created Vlan100 in Vrf100 with $OVERLAY_V4"
 	config save -y 2>/dev/null || true
