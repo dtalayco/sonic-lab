@@ -384,16 +384,25 @@ func (w *Writer) writeEntryScript() error {
 	echo "SRv6 overlay routes loaded"
 	fi
 
-	# Create overlay IPv4 loopback in VRF (SRv6 leaves only).
-	# This interface is bound to Vrf100 and its /24 is redistributed
-	# into BGP via the VRF BGP instance's 'redistribute connected'.
+	# Create overlay IPv4 VLAN interface in VRF (SRv6 leaves only).
+	# Uses a VLAN interface (Vlan100) because SONiC does not instantiate
+	# user-defined loopbacks in the kernel without a physical port behind
+	# them. A VLAN interface forces immediate kernel provisioning.
+	# The /24 is redistributed into BGP via the VRF's 'redistribute connected'.
 	if [ -n "$OVERLAY_V4" ]; then
 	config vrf add Vrf100 2>/dev/null || true
-	config interface add Loopback100 2>/dev/null || true
-	config interface vrf bind Loopback100 Vrf100 2>/dev/null || true
-	config interface ip add Loopback100 "$OVERLAY_V4" 2>/dev/null || true
-	config interface startup Loopback100 2>/dev/null || true
-	echo "Created Loopback100 in Vrf100 with $OVERLAY_V4"
+
+	# Clean up any stale loopback config from previous attempts
+	config interface vrf unbind Loopback100 2>/dev/null || true
+	config loopback del Loopback100 2>/dev/null || true
+
+	# Provision a VLAN interface as the overlay loopback
+	config vlan add 100 2>/dev/null || true
+	config interface vrf bind Vlan100 Vrf100 2>/dev/null || true
+	config interface ip add Vlan100 "$OVERLAY_V4" 2>/dev/null || true
+	config interface startup Vlan100 2>/dev/null || true
+
+	echo "Created Vlan100 in Vrf100 with $OVERLAY_V4"
 	config save -y 2>/dev/null || true
 	fi
 	fi
