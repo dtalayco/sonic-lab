@@ -1,0 +1,105 @@
+diff --git a/Makefile.work b/Makefile.work
+index 6f5e0541f..c978fbaa9 100644
+--- a/Makefile.work
++++ b/Makefile.work
+@@ -136,7 +136,7 @@ MAKEFLAGS += -B
+ CONFIGURED_ARCH := $(shell [ -f .arch ] && cat .arch || echo $(PLATFORM_ARCH))
+ CONFIGURED_PLATFORM = $(if $(PLATFORM),$(PLATFORM),$(shell cat .platform 2>/dev/null))
+ ifeq ($(CONFIGURED_ARCH),)
+-    override CONFIGURED_ARCH = amd64
++    override CONFIGURED_ARCH = $(COMPILE_HOST_ARCH)
+ endif
+ ifeq ($(PLATFORM_ARCH),)
+ 	override PLATFORM_ARCH = $(CONFIGURED_ARCH)
+diff --git a/rules/dash-sai.mk b/rules/dash-sai.mk
+index e11fdf1b9..a9950ab98 100644
+--- a/rules/dash-sai.mk
++++ b/rules/dash-sai.mk
+@@ -1,3 +1,4 @@
++ifeq ($(CONFIGURED_ARCH),amd64)
+ # DASH SAI repo: https://github.com/sonic-net/DASH
+ 
+ DASH_SAI_VERSION = 1.0.0
+@@ -15,3 +16,4 @@ SONIC_MAKE_DEBS += $(DASH_SAI)
+ DASH_SAI_DEV = libsai-dev_$(DASH_SAI_VERSION)_$(CONFIGURED_ARCH).deb
+ $(DASH_SAI_DEV)_DEPENDS = $(DASH_SAI)
+ $(eval $(call add_derived_package,$(DASH_SAI),$(DASH_SAI_DEV)))
++endif
+diff --git a/rules/p4lang.mk b/rules/p4lang.mk
+index dae7e6e3a..d3c96a7e0 100644
+--- a/rules/p4lang.mk
++++ b/rules/p4lang.mk
+@@ -1,3 +1,4 @@
++ifeq ($(CONFIGURED_ARCH),amd64)
+ # p4lang package
+ 
+ # Main target: p4lang-pi
+@@ -41,3 +42,4 @@ $(P4LANG_P4C)_DEPENDS = $(P4LANG_BMV2)
+ $(P4LANG_P4C)_WHEEL_DEPENDS = $(SCAPY)
+ $(P4LANG_P4C)_RDEPENDS = $(P4LANG_BMV2)
+ SONIC_MAKE_DEBS += $(P4LANG_P4C)
++endif
+diff --git a/scripts/build_kvm_image.sh b/scripts/build_kvm_image.sh
+index 35f5c119d..6cfc6fd86 100755
+--- a/scripts/build_kvm_image.sh
++++ b/scripts/build_kvm_image.sh
+@@ -8,6 +8,18 @@ set -x
+ #
+ #  SPDX-License-Identifier:     GPL-2.0
+ 
++BUILD_ARCH=$(uname -m)
++if [ "$BUILD_ARCH" = "aarch64" ]; then
++KVM_CMD="qemu-system-aarch64"
++KVM_MACHINE="-machine virt -cpu host"
++KVM_BIOS="-bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
++KVM_NET="-device virtio-net-pci,netdev=onienet"
++KVM_DISPLAY="-nographic"
++else
++KVM_CMD="/usr/bin/kvm"
++KVM_MACHINE='-machine "q35,smm=on"'
++fi
++
+ MEM=10240
+ DISK=$1
+ ONIE_RECOVERY_ISO=$2
+diff --git a/scripts/prepare_docker_buildinfo.sh b/scripts/prepare_docker_buildinfo.sh
+index 50dbbf034..879f6c2f7 100755
+--- a/scripts/prepare_docker_buildinfo.sh
++++ b/scripts/prepare_docker_buildinfo.sh
+@@ -36,9 +36,14 @@ if [ -z "$DISTRO" ]; then
+     if [ -z "$DOCKER_BASE_IMAGE" ]; then
+         DOCKER_BASE_IMAGE=$(grep "^FROM" $DOCKERFILE | head -n 1 | awk '{print $2}')
+     fi
+-    DISTRO=$(docker run --rm --entrypoint "" $DOCKER_BASE_IMAGE cat /etc/os-release | grep VERSION_CODENAME | cut -d= -f2)
++    case "$ARCH" in
++        armhf)  _DP="linux/arm/v7" ;;
++        arm64)  _DP="linux/arm64" ;;
++        *)      _DP="linux/amd64" ;;
++    esac
++    DISTRO=$(docker run --rm --platform $_DP --entrypoint "" $DOCKER_BASE_IMAGE cat /etc/os-release | grep VERSION_CODENAME | cut -d= -f2)
+     if [ -z "$DISTRO" ]; then
+-        DISTRO=$(docker run --rm --entrypoint "" $DOCKER_BASE_IMAGE cat /etc/apt/sources.list | grep deb.debian.org | awk '{print $3}')
++        DISTRO=$(docker run --rm --platform $_DP --entrypoint "" $DOCKER_BASE_IMAGE cat /etc/apt/sources.list | grep deb.debian.org | awk '{print $3}')
+         [ -z "$DISTRO" ] && DISTRO=jessie
+     fi
+ fi
+diff --git a/src/sonic-build-hooks/Makefile b/src/sonic-build-hooks/Makefile
+index cff2f81d0..93b4bcce9 100644
+--- a/src/sonic-build-hooks/Makefile
++++ b/src/sonic-build-hooks/Makefile
+@@ -19,7 +19,14 @@ DPKGTOOL = $(shell which dpkg-deb)
+ 
+ # If the depk-deb not installed, use the docker container to make the debian package
+ ifeq ($(shell which dpkg-deb),)
+-BUILD_COMMAND=docker run --user $(shell id -u):$(shell id -g) --rm -v $(shell pwd):/build debian:buster bash -c 'cd /build; dpkg-deb --build $(TMP_DIR)/$(SONIC_BUILD_HOOKS) $(SONIC_BUILD_HOOKS_TARGET)'
++ifeq ($(shell uname -m), aarch64)
++DOCKER_HOST_PLATFORM=linux/arm64
++else ifeq ($(shell uname -m), armv7l)
++DOCKER_HOST_PLATFORM=linux/arm/v7
++else
++DOCKER_HOST_PLATFORM=linux/amd64
++endif
++BUILD_COMMAND=docker run --user $(shell id -u):$(shell id -g) --rm --platform $(DOCKER_HOST_PLATFORM) -v $(shell pwd):/build debian:buster bash -c 'cd /build; dpkg-deb --build $(TMP_DIR)/$(SONIC_BUILD_HOOKS) $(SONIC_BUILD_HOOKS_TARGET)'
+ else
+ BUILD_COMMAND=dpkg-deb -Zxz --build $(TMP_DIR)/$(SONIC_BUILD_HOOKS) $(SONIC_BUILD_HOOKS_TARGET)
+ endif
