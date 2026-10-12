@@ -2,7 +2,7 @@ version: "3.9"
 
 x-sonic-common: &sonic-common
   image: docker-sonic-vs:latest
-  platform: linux/amd64
+  platform: linux/arm64
   privileged: true
   tty: true
   shm_size: "2gb"
@@ -14,7 +14,7 @@ x-debian-common: &debian-common
     context: ..
     dockerfile: Dockerfile.debian
   image: sonic-lab/debian:latest
-  platform: linux/amd64
+  platform: linux/arm64
   privileged: true
   tty: true
   volumes:
@@ -28,7 +28,7 @@ x-host-common: &host-common
     context: ..
     dockerfile: Dockerfile.host
   image: sonic-lab/host:latest
-  platform: linux/amd64
+  platform: linux/arm64
   privileged: true
   tty: true
 
@@ -42,7 +42,7 @@ services:
       context: ..
       dockerfile: Dockerfile.webmesh
     image: sonic-lab/webmesh:latest
-    platform: linux/amd64
+    platform: linux/arm64
     privileged: true
     pid: "host"
     container_name: webmesh
