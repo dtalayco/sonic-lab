@@ -435,6 +435,15 @@ func (w *Writer) writeEntryScript() error {
 	fi
 	fi
 
+	# Fix lldpd socket race condition: lldpd may fail to create its
+	# Unix socket if /run is not fully ready at supervisord startup.
+	# If the socket is missing, restart lldpd to force socket creation.
+	if ! [ -S /run/lldpd.socket ]; then
+	echo "lldpd socket missing, restarting lldpd..."
+	supervisorctl restart lldpd 2>/dev/null || true
+	sleep 3
+	fi
+
 	# Keep the container alive by waiting on supervisord.
 	wait $SUPERVISOR_PID
 	`)
