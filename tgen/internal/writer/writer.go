@@ -538,6 +538,7 @@ func (w *Writer) generateFRRConfig(sw topo.Switch) string {
 		sb.WriteString(" !\n")
 		sb.WriteString(" address-family ipv4 vpn\n")
 		sb.WriteString("  neighbor TRANSIT activate\n")
+		sb.WriteString("  sid vpn export auto\n")
 		sb.WriteString(" exit-address-family\n")
 		sb.WriteString(" !\n")
 		sb.WriteString(" segment-routing srv6\n")
@@ -549,11 +550,11 @@ func (w *Writer) generateFRRConfig(sw topo.Switch) string {
 	sb.WriteString("!\n")
 
 	// Per-VRF BGP instance (SRv6 leaves/nodes only).
-	// Note: 'sid locator' is not supported in FRR 10.4.1 VRF BGP context.
-	// SRv6 SID distribution is handled by the global BGP's
-	// 'segment-routing srv6 > locator' + kernel seg6 routes.
 	if srv6 {
 		sb.WriteString(fmt.Sprintf("router bgp %d vrf vrf100\n", sw.ASN))
+		sb.WriteString(fmt.Sprintf(" rd %d:100\n", sw.ASN))
+		sb.WriteString(fmt.Sprintf(" route-target export %d:100\n", sw.ASN))
+		sb.WriteString(fmt.Sprintf(" route-target import %d:100\n", sw.ASN))
 		sb.WriteString(" address-family ipv4 unicast\n")
 		sb.WriteString("  redistribute connected\n")
 		sb.WriteString(" exit-address-family\n")
