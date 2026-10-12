@@ -533,12 +533,11 @@ func (w *Writer) generateFRRConfig(sw topo.Switch) string {
 	sb.WriteString("  neighbor TRANSIT next-hop-self\n")
 	sb.WriteString(" exit-address-family\n")
 
-	// L3VPN + SRv6 SID distribution (SRv6 leaves/nodes only).
+	// L3VPN (SRv6 leaves/nodes only).
 	if srv6 {
 		sb.WriteString(" !\n")
 		sb.WriteString(" address-family ipv4 vpn\n")
 		sb.WriteString("  neighbor TRANSIT activate\n")
-		sb.WriteString("  sid vpn export auto\n")
 		sb.WriteString(" exit-address-family\n")
 		sb.WriteString(" !\n")
 		sb.WriteString(" segment-routing srv6\n")
@@ -552,11 +551,14 @@ func (w *Writer) generateFRRConfig(sw topo.Switch) string {
 	// Per-VRF BGP instance (SRv6 leaves/nodes only).
 	if srv6 {
 		sb.WriteString(fmt.Sprintf("router bgp %d vrf vrf100\n", sw.ASN))
-		sb.WriteString(fmt.Sprintf(" rd %d:100\n", sw.ASN))
-		sb.WriteString(fmt.Sprintf(" route-target export %d:100\n", sw.ASN))
-		sb.WriteString(fmt.Sprintf(" route-target import %d:100\n", sw.ASN))
+		sb.WriteString(" !\n")
 		sb.WriteString(" address-family ipv4 unicast\n")
 		sb.WriteString("  redistribute connected\n")
+		sb.WriteString("  sid vpn export auto\n")
+		sb.WriteString(fmt.Sprintf("  rd vpn export %d:100\n", sw.ASN))
+		sb.WriteString(fmt.Sprintf("  rt vpn both %d:100\n", sw.ASN))
+		sb.WriteString("  export vpn\n")
+		sb.WriteString("  import vpn\n")
 		sb.WriteString(" exit-address-family\n")
 		sb.WriteString("exit\n")
 		sb.WriteString("!\n")
