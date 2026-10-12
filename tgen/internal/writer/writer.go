@@ -444,6 +444,11 @@ func (w *Writer) writeEntryScript() error {
 	sleep 3
 	fi
 
+	# Fix 'show lldp table': the lldpshow script expects a separate 'lldp'
+	# container (standard multi-ASIC design). In VS mode, lldpd runs in the
+	# main container, so patch the script to call lldpctl directly.
+	sed -i "s/\['sudo', 'docker', 'exec', '-i', 'lldp{}'.format(self\.lldp_instance\[lldp_instace_num\]), 'lldpctl'\]/['lldpctl']/" /usr/local/bin/lldpshow 2>/dev/null || true
+
 	# Keep the container alive by waiting on supervisord.
 	wait $SUPERVISOR_PID
 	`)
