@@ -292,6 +292,10 @@ func (w *Writer) writeEntryScript() error {
 	VTEP="${2:-}"
 	OVERLAY_V4="${3:-}"
 
+	echo "Creating docker override"
+	touch /usr/bin/docker
+	chmod +x /usr/bin/docker
+
 	echo "Waiting for vnet file /tmp/vnet_ready/$SWITCH"
 
 	while [ ! -f "/tmp/vnet_ready/$SWITCH" ]; do
