@@ -116,11 +116,16 @@ func SidAddrForASN(asn int) string {
 }
 
 // OverlayIPv4ForASN returns a deterministic IPv4 /24 address for the
-// switch's VRF overlay interface. Scheme: 192.168.<asn-65100+1>.1/24.
-// Each non-spine switch gets a unique /24 so overlay pings work
-// leaf-to-leaf through the SRv6 fabric.
+// switch's VRF overlay interface. The second octet is the ASN offset from
+// 65000, reduced modulo 255 into a positive residue and shifted into 1..255,
+// so every switch gets a unique, always-valid /24 for any ASN. (The old fixed
+// base asn-65100+1 produced negative octets — invalid addresses — for
+// topologies like ring/mesh whose ASNs start below 65100, which silently left
+// the VRF overlay interface unaddressed and the L3VPN with nothing to
+// advertise.) The positive-modulo keeps the octet valid even when the ASN is
+// below the 65000 base, since Go's % keeps the dividend's sign.
 func OverlayIPv4ForASN(asn int) string {
-	offset := asn - 65100 + 1
+	offset := ((asn-65000)%255+255)%255 + 1
 	return fmt.Sprintf("192.168.%d.1/24", offset)
 }
 

@@ -7,6 +7,7 @@ license that can be found in the LICENSE file.
 package topo
 
 import (
+	"net"
 	"testing"
 )
 
@@ -833,6 +834,46 @@ func TestSidAddrForASN(t *testing.T) {
 		if got := SidAddrForASN(tc.asn); got != tc.want {
 			t.Errorf("SidAddrForASN(%d) = %q, want %q", tc.asn, got, tc.want)
 		}
+	}
+}
+
+func TestOverlayIPv4ForASN(t *testing.T) {
+	// Expected values for the common lab ASNs (ring starts at 65000, clos
+	// leaves at 65100). The old asn-65100+1 scheme produced negative octets
+	// for the ring ASNs; the fixed scheme keeps every value in 1..255.
+	tests := []struct {
+		asn  int
+		want string
+	}{
+		{65000, "192.168.1.1/24"},
+		{65004, "192.168.5.1/24"},
+		{65100, "192.168.101.1/24"},
+		{65103, "192.168.104.1/24"},
+	}
+	for _, tc := range tests {
+		if got := OverlayIPv4ForASN(tc.asn); got != tc.want {
+			t.Errorf("OverlayIPv4ForASN(%d) = %q, want %q", tc.asn, got, tc.want)
+		}
+	}
+
+	// Every ASN must map to a syntactically valid IPv4 CIDR (the original bug
+	// emitted negative octets for ring/mesh ASNs below 65100).
+	for _, asn := range []int{0, 1, 64999, 65000, 65004, 65100, 65103, 65535, 70000, 1000000} {
+		got := OverlayIPv4ForASN(asn)
+		if _, _, err := net.ParseCIDR(got); err != nil {
+			t.Errorf("OverlayIPv4ForASN(%d) = %q is not a valid CIDR: %v", asn, got, err)
+		}
+	}
+
+	// Consecutive ASNs must map to unique /24s within a single topology-sized
+	// window (a lab has far fewer than 255 nodes).
+	seen := make(map[string]bool)
+	for asn := 65000; asn < 65000+255; asn++ {
+		got := OverlayIPv4ForASN(asn)
+		if seen[got] {
+			t.Fatalf("duplicate overlay /24 %q within a 255-ASN window (ASN %d)", got, asn)
+		}
+		seen[got] = true
 	}
 }
 

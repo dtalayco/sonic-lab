@@ -7,6 +7,7 @@ license that can be found in the LICENSE file.
 package writer
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -358,6 +359,31 @@ func TestSRv6_FRRConfig(t *testing.T) {
 	// Per-VRF BGP instance
 	if !strings.Contains(cfg, "router bgp 65100 vrf Vrf100") {
 		t.Error("leaf1 missing 'router bgp 65100 vrf Vrf100'")
+	}
+}
+
+func TestSRv6_SharedRT(t *testing.T) {
+	// Full mesh: every node is a non-spine with its own VRF. All must use the
+	// SAME route-target (so they import each other's routes — a full-mesh L3VPN)
+	// but a distinct per-ASN route-distinguisher.
+	tt := mustGenerate(t, topo.Options{Mesh: true, Nodes: 3, SRv6: true})
+	dir := t.TempDir()
+	w := New(dir, tt)
+	if err := w.writeFRRConfigs(); err != nil {
+		t.Fatalf("writeFRRConfigs error: %v", err)
+	}
+	for _, sw := range tt.Switches {
+		data, err := os.ReadFile(filepath.Join(dir, "frr", sw.Name+".conf"))
+		if err != nil {
+			t.Fatalf("read %s.conf: %v", sw.Name, err)
+		}
+		cfg := string(data)
+		if !strings.Contains(cfg, "rt vpn both 65000:100") {
+			t.Errorf("%s: missing shared route-target 'rt vpn both 65000:100'", sw.Name)
+		}
+		if !strings.Contains(cfg, fmt.Sprintf("rd vpn export %d:100", sw.ASN)) {
+			t.Errorf("%s: missing per-ASN route-distinguisher 'rd vpn export %d:100'", sw.Name, sw.ASN)
+		}
 	}
 }
 

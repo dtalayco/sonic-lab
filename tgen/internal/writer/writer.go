@@ -19,6 +19,13 @@ import (
 	"sonic-lab/tgen/internal/topo"
 )
 
+// sharedRT is the single route-target used by every SRv6 overlay node for both
+// import and export. Using one shared RT (instead of a per-ASN RT) is what lets
+// all sites import each other's VRF routes — a full-mesh L3VPN where every site
+// can reach every other site. The route-distinguisher (below) stays per-ASN so
+// each site's routes remain distinct in the global VPNv4 RIB.
+const sharedRT = "65000:100"
+
 // Writer generates output files into a target directory.
 type Writer struct {
 	OutputDir string
@@ -644,7 +651,7 @@ func (w *Writer) generateFRRConfig(sw topo.Switch) string {
 		sb.WriteString("  redistribute connected\n")
 		sb.WriteString("  sid vpn export auto\n")
 		sb.WriteString(fmt.Sprintf("  rd vpn export %d:100\n", sw.ASN))
-		sb.WriteString(fmt.Sprintf("  rt vpn both %d:100\n", sw.ASN))
+		sb.WriteString(fmt.Sprintf("  rt vpn both %s\n", sharedRT))
 		sb.WriteString("  export vpn\n")
 		sb.WriteString("  import vpn\n")
 		sb.WriteString(" exit-address-family\n")
