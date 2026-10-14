@@ -383,6 +383,18 @@ func (w *Writer) writeEntryScript() error {
 	done
 	echo "Enabled seg6_enabled=1 on all interfaces"
 
+	# Enable IPv6 forwarding. Multi-hop topologies (ring, spine-leaf)
+	# require intermediate nodes to transit SRv6/underlay packets; the
+	# kernel default (0) silently drops transit traffic. In a full mesh
+	# every pair is directly connected so forwarding is never needed,
+	# but enabling it is harmless and required for ring/clos.
+	sysctl -w net.ipv6.conf.all.forwarding=1 2>/dev/null || true
+	sysctl -w net.ipv6.conf.default.forwarding=1 2>/dev/null || true
+	for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -E '^(Ethernet|Loopback)'); do
+	echo 1 > "/proc/sys/net/ipv6/conf/$iface/forwarding" 2>/dev/null || true
+	done
+	echo "Enabled IPv6 forwarding on all interfaces"
+
 	echo "Loading SRv6 overlay routes..."
 	bash /srv6.routes || echo "WARNING: SRv6 routes script returned non-zero"
 	echo "SRv6 overlay routes loaded"
@@ -687,6 +699,20 @@ func (w *Writer) writeSRv6Routes() error {
 		sidAddr := topo.SidAddrForASN(sw.ASN)
 		sb.WriteString(fmt.Sprintf("# End SID:          %s\n", sidAddr))
 		sb.WriteString(fmt.Sprintf("# Overlay prefix:   %s\n\n", sw.OverlayPrefix))
+
+		// Assign the SRv6 locator /64 to Loopback0 as a connected address.
+		// This is what actually enters the kernel RIB: without it the locator
+		// is only a /128 (the End SID) sitting in the /64 space and is never
+		// a connected prefix, so the FRR `network <locator>/64` statement
+		// advertises nothing (BGP only advertises prefixes present in the
+		// RIB). Once connected, every remote node installs an underlay route
+		// to this switch's locator and can resolve the SRv6 outer destination
+		// (the End SID, which lives within the locator). Without this the
+		// outer-dst FIB lookup falls through to the default (RA) route and the
+		// overlay is broken.
+		locatorPrefix := topo.LocatorPrefixForASN(sw.ASN)
+		sb.WriteString(fmt.Sprintf("ip addr replace %s dev Loopback0 2>/dev/null || true\n", locatorPrefix))
+		sb.WriteString("\n")
 
 		// Assign the End SID to Loopback0 so the kernel can perform
 		// seg6 decapsulation for packets destined to this switch.

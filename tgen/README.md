@@ -133,7 +133,7 @@ unnumbered underlay. The address scheme is:
 | Purpose | Prefix | Interface |
 |---------|--------|-----------|
 | VTEP (End SID) | `fd00:0:0:<asn>::1/128` | Loopback0 |
-| Locator | `fd00:0:0:<asn>::/64` | (FRR only) |
+| Locator | `fd00:0:0:<asn>::/64` | Loopback0 |
 | Overlay service | `2001:db8:<asn>::/64` | Loopback0 |
 
 Per-switch artifacts:
@@ -141,16 +141,27 @@ Per-switch artifacts:
 - **FRR config** adds a `segment-routing srv6` block with a locator and a
   static End SID (`behavior uN`), plus `segment-routing srv6` inside the
   BGP router section (enables SID advertisement/distribution).
-- **`srv6/<name>.routes`** — a shell script that:
-  1. Adds the overlay `/128` to Loopback0
-  2. Programs a seg6 kernel route for each remote switch's overlay prefix:
+- **`srv6/<name>.routes`** — a shell script (executed by `sonic_entry.sh`
+  after the FRR config loads) that:
+  1. Adds the locator `/64` to Loopback0 as a connected address. This is the
+     linchpin: FRR advertises the locator via BGP (`network <locator>/64`),
+     but that advertisement only takes effect once the prefix is present in
+     the kernel RIB. Making the locator a connected Loopback0 address is what
+     lets every other switch learn an underlay route to it — and that underlay
+     route is how the SRv6 outer-dst (End SID) lookup resolves across the
+     fabric.
+  2. Adds the End SID (`<locator>::100/128`, behavior `uN`) and the overlay
+     `/128` to Loopback0. (The VTEP `<locator>::1/128` is added separately by
+     `sonic_entry.sh`.)
+  3. Programs a seg6 kernel route for each remote switch's overlay prefix:
      ```
-     ip -6 route add <remote-overlay>/64 encap seg6 mode encap segs <remote-vtep>
+     ip -6 route add <remote-overlay>/64 encap seg6 mode encap segs <remote-sid>
      ```
-     The single-segment SRH (remote VTEP = End behavior) causes the kernel
-     to encapsulate the packet with an outer IPv6 header destined to the
-     remote VTEP. The BGP underlay routes the outer packet; the remote
-     switch decapsulates and delivers the inner packet to its own Loopback0.
+     The single-segment SRH (remote End SID) causes the kernel to encapsulate
+     the packet with an outer IPv6 header destined to the remote End SID. The
+     BGP underlay routes the outer packet (resolving the SID via the remote
+     locator `/64`); the remote switch decapsulates and delivers the inner
+     packet to its own overlay address.
 
 The routes file is mounted at `/srv6.routes` (read-only) and executed by
 `sonic_entry.sh` after the FRR config loads.
@@ -184,6 +195,16 @@ docker exec sonic-leaf1 ping6 -c 3 2001:db8:fe4d::1
 > The SRv6 data plane (encap + decap across namespaces) is fully working
 > in the Colima 6.8 HWE kernel environment when `seg6_enabled=1` is set
 > on all interfaces on all switches.
+
+> **IPv6 forwarding is required on multi-hop topologies (ring, spine-leaf).**
+> The kernel default for `net.ipv6.conf.all.forwarding` is `0`. In a full
+> mesh every pair of switches is directly connected, so no switch ever has to
+> forward transit traffic and the default is harmless. In a ring or spine-leaf,
+> reaching a non-adjacent switch's End SID requires intermediate switches to
+> forward the (SRv6-encapsulated) outer packet; with forwarding disabled the
+> kernel silently drops it and only directly-adjacent overlay pings succeed.
+> `sonic_entry.sh` sets `net.ipv6.conf.all`/`default` (and per-interface)
+> `forwarding=1` alongside the `seg6_enabled` sysctls before loading routes.
 
 **Kernel requirement:** The host kernel must have `CONFIG_IPV6_SEG6_LWTUNNEL=y`
 (built-in or module). Colima's 6.8.0 kernel includes it. No special Docker
