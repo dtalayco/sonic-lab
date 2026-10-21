@@ -10,10 +10,10 @@ network links at runtime — powered by eBPF.
 Each link between two switches uses **two veth pairs** managed by webmesh:
 
 ```
-Switch A netns          webmesh netns              Switch B netns
+Switch A netns          webmesh netns            Switch B netns
 ┌────────────┐      ┌─────────────────────┐      ┌────────────┐
-│ EthernetX  │◄──┐  │  wm-a-X  ═══════  wm-b-Y │  ──┐EthernetY│
-│  (TAP)     │   └──│  (tc ingress)  (tc ingress)│  ──┘ (TAP)  │
+│ EthernetX  │◄──┐  │ wm-a-X  ═══  wm-b-Y │◄──┐  │ EthernetY  │
+│  (TAP)     │   └─►│(tc ingr)   (tc ingr)│   └─►│  (TAP)     │
 └────────────┘      └─────────────────────┘      └────────────┘
 ```
 
