@@ -536,6 +536,30 @@ func TestSRv6_ComposeMount_Disabled(t *testing.T) {
 	}
 }
 
+func TestCompose_EachImageBuiltOnce(t *testing.T) {
+	tt := mustGenerate(t, topo.Options{Spines: 2, Leaves: 2, HostsPerSwitch: 1, PortsPerHost: 1})
+	dir := t.TempDir()
+	w := New(dir, tt)
+
+	if err := w.writeCompose(); err != nil {
+		t.Fatalf("writeCompose error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := string(data)
+
+	// Multiple services building the same image tag race under parallel
+	// "docker compose build", so each Dockerfile must appear exactly once.
+	for _, df := range []string{"Dockerfile.webmesh", "Dockerfile.debian", "Dockerfile.host"} {
+		if n := strings.Count(compose, "dockerfile: "+df); n != 1 {
+			t.Errorf("%s referenced by %d build blocks, want 1", df, n)
+		}
+	}
+}
+
 func TestSRv6_EntryScript(t *testing.T) {
 	tt := mustGenerate(t, topo.Options{Spines: 1, Leaves: 1, SRv6: true})
 	dir := t.TempDir()
