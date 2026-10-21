@@ -57,18 +57,18 @@ flapped at runtime via a REST API.
 ┌──────────────────────────────────────────────────────────────────┐
 │                     webmesh container                            │
 │                                                                  │
-│  ┌────────────┐    ┌─────────────────────────────────────────┐   │
-│  │  API Server │    │         eBPF Patch Panel               │   │
-│  │  (Go/HTTP) │◄──►│  TC ingress on wm-* veth endpoints     │   │
-│  └────────────┘    │  bpf_redirect_peer → remote switch      │   │
-│                     └─────────────────────────────────────────┘   │
+│  ┌─────────────┐    ┌─────────────────────────────────────────┐  │
+│  │  API Server │    │         eBPF Patch Panel                │  │
+│  │  (Go/HTTP)  │◄──►│  TC ingress on wm-* veth endpoints      │  │
+│  └─────────────┘    │  bpf_redirect_peer → remote switch      │  │
+│                     └─────────────────────────────────────────┘  │
 │                                                                  │
 │  netns: webmesh (holds wm-* veth endpoints)                      │
 └──────────────────────────────────────────────────────────────────┘
          │ veth                    │ veth
          ▼                         ▼
 ┌──────────────┐           ┌──────────────┐
-│  spine1 netns │           │  leaf1 netns │
+│ spine1 netns │           │  leaf1 netns │
 │  (SONiC VS)  │           │  (SONiC VS)  │
 └──────────────┘           └──────────────┘
 ```
@@ -297,10 +297,10 @@ docker compose -f example/docker-compose.yml down && docker rmi sonic-lab/webmes
 Each link uses **two veth pairs**:
 
 ```
-Switch A netns          webmesh netns              Switch B netns
+Switch A netns          webmesh netns            Switch B netns
 ┌────────────┐      ┌─────────────────────┐      ┌────────────┐
-│ EthernetX  │◄──┐  │  wm-a-X  ═══════  wm-b-Y │  ──┐EthernetY│
-│  (TAP)     │   └──│  (tc ingress)  (tc ingress)│  ──┘ (TAP)  │
+│ EthernetX  │◄──┐  │ wm-a-X  ═══  wm-b-Y │◄──┐  │ EthernetY  │
+│  (TAP)     │   └─►│(tc ingr)   (tc ingr)│   └─►│  (TAP)     │
 └────────────┘      └─────────────────────┘      └────────────┘
 ```
 
