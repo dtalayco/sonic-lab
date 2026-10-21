@@ -28,8 +28,10 @@ $COMPOSE build
 echo "Starting webmesh patch panel..."
 $COMPOSE up -d webmesh
 
+# webmesh only reports healthy once every link is wired, so all backing
+# containers must be running before we wait on it.
 echo "Starting backing Linux containers..."
-$COMPOSE up -d spine1-linux leaf1-linux leaf2-linux
+$COMPOSE up -d $($COMPOSE config --services | grep -- '-linux$')
 
 echo "Waiting for webmesh to wire all links..."
 for i in $(seq 1 60); do
