@@ -21,11 +21,23 @@ import (
 
 // Topology is the generated network topology.
 type Topology struct {
-	Name     string
-	Switches []Switch
-	Hosts    []Host
-	Links    []Link
-	SRv6     bool // enable SRv6 overlay generation
+	Name        string
+	Switches    []Switch
+	Hosts       []Host
+	Links       []Link
+	SRv6        bool   // enable SRv6 overlay generation
+	NetnsSuffix string // suffix for each switch's backing netns container (e.g. "linux")
+}
+
+// DefaultNetnsSuffix is the default suffix for backing netns containers
+// ("spine1" → "spine1-linux").
+const DefaultNetnsSuffix = "linux"
+
+// DeviceNetnsName returns the name of the backing netns container for a switch.
+// This is the device name used in link endpoints and the compose service
+// that the SONiC container shares its network namespace with.
+func (t *Topology) DeviceNetnsName(switchName string) string {
+	return switchName + "-" + t.NetnsSuffix
 }
 
 // Switch represents a single SONiC virtual switch.
@@ -59,15 +71,16 @@ type Endpoint struct {
 
 // Options controls topology generation.
 type Options struct {
-	Spines          int  // -s: number of spine switches
-	Leaves          int  // -l: number of leaf switches
-	Mesh            bool // -m: generate full mesh topology
-	Ring            bool // -r: generate ring topology
-	Nodes           int  // -n: number of nodes (for mesh/ring)
-	Links           int  // -links: parallel links per switch pair (default 1)
-	HostsPerSwitch  int  // -h: number of hosts attached to each switch
-	PortsPerHost    int  // -p: number of ports per host (default 1)
-	SRv6            bool // -srv6: enable SRv6 overlay generation
+	Spines         int    // -s: number of spine switches
+	Leaves         int    // -l: number of leaf switches
+	Mesh           bool   // -m: generate full mesh topology
+	Ring           bool   // -r: generate ring topology
+	Nodes          int    // -n: number of nodes (for mesh/ring)
+	Links          int    // -links: parallel links per switch pair (default 1)
+	HostsPerSwitch int    // -h: number of hosts attached to each switch
+	PortsPerHost   int    // -p: number of ports per host (default 1)
+	SRv6           bool   // -srv6: enable SRv6 overlay generation
+	NetnsSuffix    string // -base: backing container suffix (default "linux")
 }
 
 // MaxPorts is the maximum number of ports available per switch
@@ -135,6 +148,9 @@ func Generate(opts Options) (*Topology, error) {
 	if opts.Links < 1 {
 		opts.Links = 1
 	}
+	if opts.NetnsSuffix == "" {
+		opts.NetnsSuffix = DefaultNetnsSuffix
+	}
 
 	var t *Topology
 
@@ -147,7 +163,7 @@ func Generate(opts Options) (*Topology, error) {
 			return nil, fmt.Errorf("mesh of %d nodes with %d links requires %d ports per node, exceeds max %d",
 				opts.Nodes, opts.Links, (opts.Nodes-1)*opts.Links, MaxPorts)
 		}
-		t = mesh(opts.Nodes, opts.Links)
+		t = mesh(opts.Nodes, opts.Links, opts.NetnsSuffix)
 
 	case opts.Ring:
 		if opts.Nodes < 3 {
@@ -157,7 +173,7 @@ func Generate(opts Options) (*Topology, error) {
 			return nil, fmt.Errorf("ring with %d links requires %d ports per node, exceeds max %d",
 				opts.Links, 2*opts.Links, MaxPorts)
 		}
-		t = ring(opts.Nodes, opts.Links)
+		t = ring(opts.Nodes, opts.Links, opts.NetnsSuffix)
 
 	default:
 		if opts.Spines < 1 {
@@ -174,7 +190,7 @@ func Generate(opts Options) (*Topology, error) {
 			return nil, fmt.Errorf("each leaf would need %d ports (%d spines x %d links), exceeds max %d",
 				opts.Spines*opts.Links, opts.Spines, opts.Links, MaxPorts)
 		}
-		t = spineLeaf(opts.Spines, opts.Leaves, opts.Links)
+		t = spineLeaf(opts.Spines, opts.Leaves, opts.Links, opts.NetnsSuffix)
 	}
 
 	// Add hosts if requested
@@ -241,7 +257,7 @@ func addHosts(t *Topology, hostsPerSwitch, portsPerHost int) error {
 
 			t.Links = append(t.Links, Link{
 				A: Endpoint{
-					Device: fmt.Sprintf("%s-linux", t.Switches[targetSwitch].Name),
+					Device: t.DeviceNetnsName(t.Switches[targetSwitch].Name),
 					Port:   portName(idx),
 				},
 				B: Endpoint{
@@ -257,8 +273,8 @@ func addHosts(t *Topology, hostsPerSwitch, portsPerHost int) error {
 
 // spineLeaf generates a classic spine-leaf topology where every leaf
 // has `links` parallel uplinks to every spine (for ECMP).
-func spineLeaf(spines, leaves, links int) *Topology {
-	t := &Topology{Name: fmt.Sprintf("spine-leaf-%dx%d", spines, leaves)}
+func spineLeaf(spines, leaves, links int, netnsSuffix string) *Topology {
+	t := &Topology{Name: fmt.Sprintf("spine-leaf-%dx%d", spines, leaves), NetnsSuffix: netnsSuffix}
 
 	// Create spines: each has leaves*links ports
 	for s := 0; s < spines; s++ {
@@ -302,11 +318,11 @@ func spineLeaf(spines, leaves, links int) *Topology {
 			for k := 0; k < links; k++ {
 				t.Links = append(t.Links, Link{
 					A: Endpoint{
-						Device: fmt.Sprintf("spine%d-linux", s+1),
+						Device: t.DeviceNetnsName(fmt.Sprintf("spine%d", s+1)),
 						Port:   portName(l*links + k),
 					},
 					B: Endpoint{
-						Device: fmt.Sprintf("leaf%d-linux", l+1),
+						Device: t.DeviceNetnsName(fmt.Sprintf("leaf%d", l+1)),
 						Port:   portName(s*links + k),
 					},
 				})
@@ -319,8 +335,8 @@ func spineLeaf(spines, leaves, links int) *Topology {
 
 // mesh generates a full mesh topology where every node is connected
 // to every other node with `links` parallel links per pair.
-func mesh(n, links int) *Topology {
-	t := &Topology{Name: fmt.Sprintf("mesh-%d", n)}
+func mesh(n, links int, netnsSuffix string) *Topology {
+	t := &Topology{Name: fmt.Sprintf("mesh-%d", n), NetnsSuffix: netnsSuffix}
 
 	// Create nodes: each has (n-1)*links ports
 	for i := 0; i < n; i++ {
@@ -348,11 +364,11 @@ func mesh(n, links int) *Topology {
 			for k := 0; k < links; k++ {
 				t.Links = append(t.Links, Link{
 					A: Endpoint{
-						Device: fmt.Sprintf("node%d-linux", i+1),
+						Device: t.DeviceNetnsName(fmt.Sprintf("node%d", i+1)),
 						Port:   portName((j-1)*links + k),
 					},
 					B: Endpoint{
-						Device: fmt.Sprintf("node%d-linux", j+1),
+						Device: t.DeviceNetnsName(fmt.Sprintf("node%d", j+1)),
 						Port:   portName(i*links + k),
 					},
 				})
@@ -365,8 +381,8 @@ func mesh(n, links int) *Topology {
 
 // ring generates a ring topology where each node connects to its
 // two neighbors with `links` parallel links per neighbor (for ECMP).
-func ring(n, links int) *Topology {
-	t := &Topology{Name: fmt.Sprintf("ring-%d", n)}
+func ring(n, links int, netnsSuffix string) *Topology {
+	t := &Topology{Name: fmt.Sprintf("ring-%d", n), NetnsSuffix: netnsSuffix}
 
 	// Create nodes: each has 2*links ports
 	for i := 0; i < n; i++ {
@@ -390,11 +406,11 @@ func ring(n, links int) *Topology {
 		for k := 0; k < links; k++ {
 			t.Links = append(t.Links, Link{
 				A: Endpoint{
-					Device: fmt.Sprintf("node%d-linux", i+1),
+					Device: t.DeviceNetnsName(fmt.Sprintf("node%d", i+1)),
 					Port:   portName(links + k), // "next" side
 				},
 				B: Endpoint{
-					Device: fmt.Sprintf("node%d-linux", next+1),
+					Device: t.DeviceNetnsName(fmt.Sprintf("node%d", next+1)),
 					Port:   portName(k), // "prev" side
 				},
 			})

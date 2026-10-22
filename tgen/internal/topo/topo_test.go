@@ -8,6 +8,7 @@ package topo
 
 import (
 	"net"
+	"strings"
 	"testing"
 )
 
@@ -895,5 +896,33 @@ func TestSRv6_Mesh(t *testing.T) {
 			t.Errorf("duplicate overlay prefix %q", sw.OverlayPrefix)
 		}
 		seen[sw.OverlayPrefix] = true
+	}
+}
+
+func TestNetnsSuffix_DeviceNames(t *testing.T) {
+	tests := []struct {
+		netnsSuffix string
+		want        string
+	}{
+		{"", "spine1-linux"}, // empty defaults to DefaultNetnsSuffix
+		{"net", "spine1-net"},
+	}
+	for _, tc := range tests {
+		tt, err := Generate(Options{Spines: 1, Leaves: 1, HostsPerSwitch: 1, NetnsSuffix: tc.netnsSuffix})
+		if err != nil {
+			t.Fatalf("Generate(netnsSuffix=%q) error: %v", tc.netnsSuffix, err)
+		}
+		if got := tt.DeviceNetnsName("spine1"); got != tc.want {
+			t.Errorf("netnsSuffix=%q: DeviceNetnsName(spine1) = %q, want %q", tc.netnsSuffix, got, tc.want)
+		}
+		suffix := "-" + tt.NetnsSuffix
+		for _, l := range tt.Links {
+			for _, ep := range []Endpoint{l.A, l.B} {
+				isHost := strings.HasPrefix(ep.Device, "host")
+				if !isHost && !strings.HasSuffix(ep.Device, suffix) {
+					t.Errorf("netnsSuffix=%q: switch endpoint %q missing suffix %q", tc.netnsSuffix, ep.Device, suffix)
+				}
+			}
+		}
 	}
 }
