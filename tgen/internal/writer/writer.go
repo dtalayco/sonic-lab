@@ -78,8 +78,6 @@ func (w *Writer) Run() error {
 func (w *Writer) writeCompose() error {
 	var sb strings.Builder
 
-	sb.WriteString("version: \"3.9\"\n\n")
-
 	// Anchors
 	sb.WriteString("x-sonic-common: &sonic-common\n")
 	sb.WriteString("  image: docker-sonic-vs:latest\n")

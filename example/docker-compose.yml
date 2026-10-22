@@ -1,5 +1,3 @@
-version: "3.9"
-
 x-sonic-common: &sonic-common
   image: docker-sonic-vs:latest
   platform: linux/arm64
