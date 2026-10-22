@@ -4,12 +4,58 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  GO_VERSION: "1.25"
+
 jobs:
-  test-docker-compose:
+  # Unit tests for both Go modules. They need no Docker and finish quickly,
+  # so they run in parallel with the (much slower) topology bring-ups.
+  go-tests:
+    name: go/${{ matrix.module }}
     runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [tgen, webmesh]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run unit tests
+        working-directory: ${{ matrix.module }}
+        run: go test ./...
+
+  # For each topology: generate it with tgen, build and bring the lab up,
+  # then verify that every switch establishes the BGP sessions its generated
+  # FRR config declares. The expected count is read straight from the tgen
+  # output (one "neighbor ... interface" line per session), so the check is
+  # fully driven by the generator and needs no hardcoding.
+  topology:
+    name: topology/${{ matrix.topology }}
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - topology: spine-leaf
+            tgen-args: "-s 2 -l 4"
+          - topology: ring
+            tgen-args: "-r -n 4"
+          - topology: mesh
+            tgen-args: "-m -n 4"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
 
       - name: Set up Docker
         uses: docker/setup-buildx-action@v3
@@ -32,7 +78,6 @@ jobs:
       - name: Pull docker-sonic-vs image
         run: |
           # Pull the arm64 docker-sonic-vs image from GHCR
-          echo "Pulling docker-sonic-vs image..."
           docker pull ghcr.io/mestery/docker-sonic-vs:latest
 
           # The compose files reference docker-sonic-vs:latest, so retag
@@ -40,93 +85,87 @@ jobs:
           docker tag ghcr.io/mestery/docker-sonic-vs:latest docker-sonic-vs:latest
 
           # Verify the image is present
-          if ! docker images | grep -q "docker-sonic-vs"; then
-            echo "Error: docker-sonic-vs image is not present"
-            exit 1
-          fi
+          docker images | grep -q "docker-sonic-vs" || { echo "Error: docker-sonic-vs image is not present"; exit 1; }
+
+      - name: Build tgen
+        working-directory: tgen
+        run: go build -o tgen .
+
+      - name: Generate topology with tgen
+        run: ./tgen/tgen ${{ matrix.tgen-args }} -o ./ci-${{ matrix.topology }}/
 
       - name: Validate Docker Compose file
-        run: |
-          # Validate the docker-compose.yml syntax
-          docker compose -f example/docker-compose.yml config --quiet
+        run: docker compose -f ci-${{ matrix.topology }}/docker-compose.yml config --quiet
 
       - name: Build all images
+        run: docker compose -f ci-${{ matrix.topology }}/docker-compose.yml build
+
+      - name: Bring up the lab
         run: |
-          docker compose -f example/docker-compose.yml build
+          DIR="ci-${{ matrix.topology }}"
+          COMPOSE="docker compose -f $DIR/docker-compose.yml"
 
-      - name: Bring up all services
+          # Patch panel first, then the backing netns containers.
+          $COMPOSE up -d webmesh
+          $COMPOSE up -d $($COMPOSE config --services | grep -- '-linux$')
+
+          # webmesh only reports healthy once every link is wired, so gate
+          # the SONiC bring-up on that.
+          for i in $(seq 1 90); do
+            status=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}starting{{end}}' webmesh 2>/dev/null || echo "starting")
+            if [ "$status" = "healthy" ]; then
+              echo "webmesh is healthy — all links wired"
+              break
+            fi
+            if [ "$i" -eq 90 ]; then
+              echo "Timed out waiting for webmesh to wire links"
+              docker logs webmesh
+              exit 1
+            fi
+            sleep 2
+          done
+
+          # Start the SONiC containers (compose waits for webmesh healthy).
+          $COMPOSE up -d
+
+          echo "Running containers:"
+          docker ps --filter "name=sonic-"
+
+      - name: Verify BGP converged on every switch
         run: |
-          # Start all linux containers
-          docker compose -f example/docker-compose.yml up -d spine1-linux leaf1-linux leaf2-linux
+          # Opt out of the inherited errexit: a failing docker exec or grep
+          # just yields a count of 0, which we handle explicitly below.
+          set +e
 
-          # Wait for containers to be ready
-          echo "Waiting for linux containers to start..."
-          sleep 10
+          DIR="ci-${{ matrix.topology }}"
 
-          # Now, start webmesh + sonic containers
-          # (webmesh handles all veth wiring via its reconciler)
-          docker compose -f example/docker-compose.yml up -d
+          for conf in "$DIR"/frr/*.conf; do
+            sw=$(basename "$conf" .conf)
+            # Each BGP session is one "neighbor <iface> interface" line.
+            expected=$(grep -c "interface peer-group TRANSIT" "$conf")
+            container="sonic-$sw"
 
-          # Now wait for sonic containers to be ready
-          echo "Waiting for sonic containers to start..."
-          sleep 180
+            # Poll until every declared session is established (max ~5 min).
+            # "Establ" is FRR's summary marker and a prefix of "Established",
+            # so this counts established neighbors in either view.
+            ok=0
+            for i in $(seq 1 60); do
+              actual=$(docker exec -T "$container" vtysh -c "show ipv6 bgp summary" 2>/dev/null | grep -c "Establ")
+              if [ "${actual:-0}" -ge "$expected" ]; then ok=1; break; fi
+              sleep 5
+            done
 
-      - name: Verify all services are running
-        run: |
-          # Check that all containers are running
-          echo "Checking container status..."
-          docker compose -f example/docker-compose.yml ps -q | while read container; do
-            if [ -n "$container" ]; then
-              status=$(docker inspect --format='{{.State.Running}}' "$container")
-              echo "Container $container status: $status"
-              if [ "$status" != "true" ]; then
-                echo "Error: Container $container is not running"
-                exit 1
-              fi
+            actual=$(docker exec -T "$container" vtysh -c "show ipv6 bgp summary" 2>/dev/null | grep -c "Establ")
+            echo "$container: ${actual:-0}/${expected} BGP sessions established"
+            if [ "$ok" -ne 1 ]; then
+              echo "FAIL: $container only established ${actual:-0}/${expected} BGP sessions"
+              docker exec -T "$container" vtysh -c "show ipv6 bgp summary" || true
+              exit 1
             fi
           done
 
-      - name: Test show interface status command in spine1 container
-        run: |
-          # Test that we can execute "show interface status" command in spine1 container
-          echo "Testing show interface status in spine1 container..."
-          result=$(docker compose -f example/docker-compose.yml exec -T spine1 bash -c "show interface status" 2>&1)
-          if [ $? -ne 0 ]; then
-            echo "Error: Failed to run 'show interface status' in spine1 container"
-            echo "Output: $result"
-            exit 1
-          else
-            echo "Successfully executed 'show interface status' in spine1 container"
-          fi
-
-      - name: Test show interface status command in leaf1 container
-        run: |
-          # Test that we can execute "show interface status" command in leaf1 container
-          echo "Testing show interface status in leaf1 container..."
-          result=$(docker compose -f example/docker-compose.yml exec -T leaf1 bash -c "show interface status" 2>&1)
-          if [ $? -ne 0 ]; then
-            echo "Error: Failed to run 'show interface status' in leaf1 container"
-            echo "Output: $result"
-            exit 1
-          else
-            echo "Successfully executed 'show interface status' in leaf1 container"
-          fi
-
-      - name: Test show interface status command in leaf2 container
-        run: |
-          # Test that we can execute "show interface status" command in leaf2 container
-          echo "Testing show interface status in leaf2 container..."
-          result=$(docker compose -f example/docker-compose.yml exec -T leaf2 bash -c "show interface status" 2>&1)
-          if [ $? -ne 0 ]; then
-            echo "Error: Failed to run 'show interface status' in leaf2 container"
-            echo "Output: $result"
-            exit 1
-          else
-            echo "Successfully executed 'show interface status' in leaf2 container"
-          fi
+          echo "All switches in $DIR reached full BGP convergence."
 
       - name: Cleanup
         if: always()
-        run: |
-          # Ensure any leftover containers are cleaned up  
-          docker compose -f example/docker-compose.yml down --remove-orphans || true
+        run: docker compose -f ci-${{ matrix.topology }}/docker-compose.yml down --remove-orphans || true
