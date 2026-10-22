@@ -580,3 +580,46 @@ func TestSRv6_EntryScript(t *testing.T) {
 		t.Error("missing /srv6.routes execution in entry script")
 	}
 }
+
+func TestNetnsSuffix_ComposeAndNeighbors(t *testing.T) {
+	tt := mustGenerate(t, topo.Options{Spines: 1, Leaves: 2, HostsPerSwitch: 1, NetnsSuffix: "net"})
+	dir := t.TempDir()
+	w := New(dir, tt)
+
+	if err := w.writeCompose(); err != nil {
+		t.Fatalf("writeCompose error: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compose := string(data)
+
+	for _, want := range []string{
+		"  spine1-net:\n",
+		"    container_name: spine1-net\n",
+		`command: ["bash", "/init_linux.sh", "spine1-net"]`,
+		"      spine1-net:\n        condition: service_started\n",
+		`network_mode: "service:spine1-net"`,
+		`entrypoint: ["/bin/bash", "/sonic_entry.sh", "spine1-net",`,
+	} {
+		if !strings.Contains(compose, want) {
+			t.Errorf("compose missing %q", want)
+		}
+	}
+	if strings.Contains(compose, "-linux") {
+		t.Error("compose still contains '-linux' with -base net")
+	}
+
+	// BGP neighbors are found by matching link endpoints to switch devices,
+	// so they must still be generated with a non-default netns suffix.
+	var spine topo.Switch
+	for _, sw := range tt.Switches {
+		if sw.Name == "spine1" {
+			spine = sw
+		}
+	}
+	if got := len(w.switchNeighbors(spine)); got != 2 {
+		t.Errorf("spine1 switchNeighbors = %d, want 2 (one per leaf, hosts excluded)", got)
+	}
+}
