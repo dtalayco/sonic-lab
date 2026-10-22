@@ -90,10 +90,11 @@ func (w *Writer) writeCompose() error {
 	sb.WriteString("  security_opt:\n")
 	sb.WriteString("    - seccomp=unconfined\n\n")
 
+	// The debian and host anchors carry only the image name, not build:.
+	// Each image is built by exactly one service (the first that uses it);
+	// if every service built the same tag, compose would run the builds in
+	// parallel and they would race to create it.
 	sb.WriteString("x-debian-common: &debian-common\n")
-	sb.WriteString("  build:\n")
-	sb.WriteString("    context: ..\n")
-	sb.WriteString("    dockerfile: Dockerfile.debian\n")
 	sb.WriteString("  image: sonic-lab/debian:latest\n")
 	sb.WriteString("  platform: linux/arm64\n")
 	sb.WriteString("  privileged: true\n")
@@ -105,9 +106,6 @@ func (w *Writer) writeCompose() error {
 	sb.WriteString("  shm_size: \"2gb\"\n\n")
 
 	sb.WriteString("x-host-common: &host-common\n")
-	sb.WriteString("  build:\n")
-	sb.WriteString("    context: ..\n")
-	sb.WriteString("    dockerfile: Dockerfile.host\n")
 	sb.WriteString("  image: sonic-lab/host:latest\n")
 	sb.WriteString("  platform: linux/arm64\n")
 	sb.WriteString("  privileged: true\n")
@@ -145,10 +143,13 @@ func (w *Writer) writeCompose() error {
 	sb.WriteString("  # Backing Linux containers #\n")
 	sb.WriteString("  ###########################\n\n")
 
-	for _, sw := range w.Topology.Switches {
+	for i, sw := range w.Topology.Switches {
 		name := sw.Name
 		sb.WriteString(fmt.Sprintf("  %s-linux:\n", name))
 		sb.WriteString("    <<: *debian-common\n")
+		if i == 0 {
+			writeBuild(&sb, "Dockerfile.debian")
+		}
 		sb.WriteString(fmt.Sprintf("    container_name: %s-linux\n", name))
 		sb.WriteString(fmt.Sprintf("    command: [\"bash\", \"/init_linux.sh\", \"%s-linux\"]\n\n", name))
 	}
@@ -192,6 +193,9 @@ func (w *Writer) writeCompose() error {
 		for i, h := range w.Topology.Hosts {
 			sb.WriteString(fmt.Sprintf("  %s:\n", h.Name))
 			sb.WriteString("    <<: *host-common\n")
+			if i == 0 {
+				writeBuild(&sb, "Dockerfile.host")
+			}
 			sb.WriteString(fmt.Sprintf("    container_name: %s\n", h.Name))
 			if i < len(w.Topology.Hosts)-1 {
 				sb.WriteString("\n")
@@ -200,6 +204,13 @@ func (w *Writer) writeCompose() error {
 	}
 
 	return os.WriteFile(filepath.Join(w.OutputDir, "docker-compose.yml"), []byte(sb.String()), 0o644)
+}
+
+// writeBuild emits a service-level build: block for a Dockerfile at the repo root.
+func writeBuild(sb *strings.Builder, dockerfile string) {
+	sb.WriteString("    build:\n")
+	sb.WriteString("      context: ..\n")
+	sb.WriteString(fmt.Sprintf("      dockerfile: %s\n", dockerfile))
 }
 
 // --- topology.yml (consumed by webmesh) ---
