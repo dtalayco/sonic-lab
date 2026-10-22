@@ -14,21 +14,31 @@ import (
 	"strings"
 )
 
+// maxIfnameLen is the longest interface name Linux accepts (IFNAMSIZ - 1).
+const maxIfnameLen = 15
+
+// baseName strips the netns suffix from a device name, e.g.
+// spine1-linux or spine1-net → spine1. Names without a '-' are unchanged.
+func baseName(dev string) string {
+	if i := strings.LastIndex(dev, "-"); i > 0 {
+		return dev[:i]
+	}
+	return dev
+}
+
 // wmIfname generates the webmesh-side veth endpoint name.
 // Convention: "wm-" + base device name + "-" + port number.
 // e.g. spine1-linux + Ethernet0 → "wm-spine1-0"
 func wmIfname(dev, port string) string {
-	base := strings.TrimSuffix(dev, "-linux")
 	portNum := strings.TrimPrefix(port, "Ethernet")
-	return "wm-" + base + "-" + portNum
+	return "wm-" + baseName(dev) + "-" + portNum
 }
 
 // swIfname generates the temporary name for the switch-side veth endpoint
 // before it is moved into the target namespace and renamed.
 func swIfname(dev, port string) string {
-	base := strings.TrimSuffix(dev, "-linux")
 	portNum := strings.TrimPrefix(port, "Ethernet")
-	return "sw-" + base + "-" + portNum
+	return "sw-" + baseName(dev) + "-" + portNum
 }
 
 // containerPID returns the host PID of the init process of the named container.
@@ -142,6 +152,11 @@ func createLink(devA, portA, devB, portB string) error {
 	swA := swIfname(devA, portA)
 	wmB := wmIfname(devB, portB)
 	swB := swIfname(devB, portB)
+	for _, n := range []string{wmA, swA, wmB, swB} {
+		if len(n) > maxIfnameLen {
+			return fmt.Errorf("veth name %q exceeds %d chars; use shorter device names", n, maxIfnameLen)
+		}
+	}
 
 	// --- Veth pair A: webmesh ↔ switch A ---
 	if err := run("ip", "link", "add", wmA, "type", "veth", "peer", "name", swA); err != nil {
