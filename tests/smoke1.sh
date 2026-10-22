@@ -29,7 +29,7 @@ ALL_TOPOLOGIES="spine-leaf ring mesh"
 
 topo_args() {
 	case "$1" in
-	spine-leaf) echo "-s 2 -l 2" ;;
+	spine-leaf) echo "-s 2 -l 2 -base ns" ;;
 	ring) echo "-r -n 4" ;;
 	mesh) echo "-m -n 4" ;;
 	*) return 1 ;;
