@@ -305,7 +305,7 @@ Each link uses **two veth pairs**:
 ```
 Switch A netns          webmesh netns            Switch B netns
 ┌────────────┐      ┌─────────────────────┐      ┌────────────┐
-│ EthernetX  │◄──┐  │ wm-a-X  ═══  wm-b-Y │◄──┐  │ EthernetY  │
+│ EthernetX  │◄──┐  │ wm-ethA ═══ wm-ethB │◄──┐  │ EthernetY  │
 │  (TAP)     │   └─►│(tc ingr)   (tc ingr)│   └─►│  (TAP)     │
 └────────────┘      └─────────────────────┘      └────────────┘
 ```

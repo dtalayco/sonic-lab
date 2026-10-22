@@ -7,6 +7,7 @@ license that can be found in the LICENSE file.
 package webmesh
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -239,14 +240,14 @@ func TestWmNumAllocation(t *testing.T) {
 	b := Endpoint{Device: "leaf1-linux", Port: "Ethernet0"}
 	c := Endpoint{Device: "leaf2-linux", Port: "Ethernet0"}
 
-	if n := r.wmNum(a); n != 0 {
-		t.Errorf("wmNum(a) = %d, want 0", n)
+	if n := r.assignWmNum(a); n != 0 {
+		t.Errorf("assignWmNum(a) = %d, want 0", n)
 	}
-	if n := r.wmNum(b); n != 1 {
-		t.Errorf("wmNum(b) = %d, want 1", n)
+	if n := r.assignWmNum(b); n != 1 {
+		t.Errorf("assignWmNum(b) = %d, want 1", n)
 	}
-	if n := r.wmNum(a); n != 0 {
-		t.Errorf("wmNum(a) again = %d, want stable 0", n)
+	if n := r.assignWmNum(a); n != 0 {
+		t.Errorf("assignWmNum(a) again = %d, want stable 0", n)
 	}
 
 	// a is neither desired nor applied, so pruning frees 0 for reuse
@@ -255,34 +256,25 @@ func TestWmNumAllocation(t *testing.T) {
 	if _, ok := r.wmNums[endpointKey(a)]; ok {
 		t.Error("prune kept unused endpoint a")
 	}
-	if n := r.wmNum(c); n != 0 {
-		t.Errorf("wmNum(c) = %d, want reused 0", n)
+	if n := r.assignWmNum(c); n != 0 {
+		t.Errorf("assignWmNum(c) = %d, want reused 0", n)
 	}
 	if n := r.wmNum(b); n != 1 {
 		t.Errorf("wmNum(b) after prune = %d, want 1", n)
 	}
 }
 
-func TestWmNumsPersisted(t *testing.T) {
-	dir := t.TempDir()
-	stateFile := filepath.Join(dir, "state.json")
-	r := NewReconciler(stateFile, "", time.Hour, nil)
-	l := Link{Endpoints: []Endpoint{
-		{Device: "spine1-net", Port: "Ethernet40"},
-		{Device: "leaf3-net", Port: "Ethernet8"},
-	}}
-	r.mu.Lock()
-	r.applied[l.Key()] = l
-	r.wmNum(l.Endpoints[1]) // assign out of order so B gets 0
-	r.saveState()
-	r.mu.Unlock()
-
-	r2 := NewReconciler(stateFile, "", time.Hour, nil)
-	want := map[string]string{
-		"wm-eth0": "leaf3-net:Ethernet8",
-		"wm-eth1": "spine1-net:Ethernet40",
+// testLinks returns three links whose keys sort as l[0] < l[1] < l[2].
+func testLinks() []Link {
+	return []Link{
+		{Endpoints: []Endpoint{{Device: "leaf1-net", Port: "Ethernet0"}, {Device: "spine1-net", Port: "Ethernet0"}}},
+		{Endpoints: []Endpoint{{Device: "leaf2-net", Port: "Ethernet0"}, {Device: "spine1-net", Port: "Ethernet4"}}},
+		{Endpoints: []Endpoint{{Device: "leaf3-net", Port: "Ethernet0"}, {Device: "spine1-net", Port: "Ethernet8"}}},
 	}
-	got := r2.Interfaces()
+}
+
+func checkInterfaces(t *testing.T, got, want map[string]string) {
+	t.Helper()
 	if len(got) != len(want) {
 		t.Fatalf("Interfaces() = %v, want %v", got, want)
 	}
@@ -290,5 +282,82 @@ func TestWmNumsPersisted(t *testing.T) {
 		if got[k] != v {
 			t.Errorf("Interfaces()[%q] = %q, want %q", k, got[k], v)
 		}
+	}
+}
+
+func TestWmNumsPersisted(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+	r := NewReconciler(stateFile, "", time.Hour, nil)
+	links := testLinks()
+	r.mu.Lock()
+	// Assign out of key order so the saved numbers differ from what
+	// sorted assignment would produce.
+	for i := len(links) - 1; i >= 0; i-- {
+		l := links[i]
+		r.applied[l.Key()] = l
+		r.assignWmNum(l.Endpoints[0])
+		r.assignWmNum(l.Endpoints[1])
+	}
+	r.saveState()
+	r.mu.Unlock()
+	want := r.Interfaces()
+
+	r2 := NewReconciler(stateFile, "", time.Hour, nil)
+	checkInterfaces(t, r2.Interfaces(), want)
+	if r2.wmNum(links[2].Endpoints[0]) != 0 {
+		t.Errorf("leaf3 = %d, want saved 0", r2.wmNum(links[2].Endpoints[0]))
+	}
+}
+
+func TestLoadStateAssignsMissingWmNumsSorted(t *testing.T) {
+	// A state file from before wm_nums existed: applied links, no numbers.
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+	links := testLinks()
+	data, _ := json.Marshal(map[string]interface{}{"applied": []Link{links[2], links[0], links[1]}})
+	if err := os.WriteFile(stateFile, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]string{
+		"wm-eth0": "leaf1-net:Ethernet0",
+		"wm-eth1": "spine1-net:Ethernet0",
+		"wm-eth2": "leaf2-net:Ethernet0",
+		"wm-eth3": "spine1-net:Ethernet4",
+		"wm-eth4": "leaf3-net:Ethernet0",
+		"wm-eth5": "spine1-net:Ethernet8",
+	}
+	// Map iteration order varies, so load several times.
+	for i := 0; i < 20; i++ {
+		if err := os.WriteFile(stateFile, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		r := NewReconciler(stateFile, "", time.Hour, nil)
+		checkInterfaces(t, r.Interfaces(), want)
+	}
+
+	// The assigned numbers are saved, so the next load reads them back.
+	r := NewReconciler(stateFile, "", time.Hour, nil)
+	checkInterfaces(t, r.Interfaces(), want)
+}
+
+func TestInterfacesReadOnly(t *testing.T) {
+	r := newTestReconciler(t)
+	l := testLinks()[0]
+	r.mu.Lock()
+	r.applied[l.Key()] = l
+	r.assignWmNum(l.Endpoints[0])
+	r.assignWmNum(l.Endpoints[1])
+	before := len(r.wmNums)
+	r.mu.Unlock()
+
+	r.Interfaces()
+	r.LinkStates()
+	if _, err := r.GetLinkStats(l.Key()); err == nil {
+		t.Error("GetLinkStats without eBPF: want error")
+	}
+	if len(r.wmNums) != before {
+		t.Errorf("read paths changed wmNums: %d entries, want %d", len(r.wmNums), before)
 	}
 }

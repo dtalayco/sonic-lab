@@ -9,9 +9,10 @@ Build:
     clang -O2 -target bpf -c patch_panel.c -o patch_panel.o
 
 For each link A:EthernetX <-> B:EthernetY, the webmesh namespace holds
-two veth endpoints: wm-a-x and wm-b-y. This program is attached to the
-ingress of both. On ingress, it looks up the incoming ifindex in
-link_map to get the peer ifindex, then calls bpf_redirect_peer() which
+two veth endpoints, wm-ethA and wm-ethB, where the reconciler assigns
+A and B per endpoint. This program is attached to the ingress of both.
+On ingress, it looks up the incoming ifindex in link_map to get the
+peer ifindex, then calls bpf_redirect_peer() which
 delivers the packet to the veth-peer of that ifindex (i.e., the switch
 interface in the remote switch's namespace).
 */
@@ -75,8 +76,7 @@ int patch_panel(struct __sk_buff *skb)
     }
 
     /* Redirect to the peer of the remote webmesh endpoint.
-     * bpf_redirect_peer(X) sends the skb to the veth-peer of ifindex X.
-     * If X is wm-b-y (in webmesh), its peer is EthernetY (in switch B). */
+     * bpf_redirect_peer(X) sends the skb to the veth-peer of ifindex X. */
     return bpf_redirect_peer(*peer, 0);
 }
 

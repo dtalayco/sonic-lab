@@ -27,7 +27,7 @@ type Reconciler struct {
 	desired      map[string]Link
 	applied      map[string]Link
 	linkStates   map[string]bool // key → true=up, false=down
-	wmNums       map[string]int  // endpoint "device:port" → N in its wm-ethN name
+	wmNums       map[string]int  // endpoint "device:port" → N in its wm-ethN name; covers every applied endpoint
 	stateFile    string
 	topologyFile string
 	topoMtime    time.Time
@@ -108,7 +108,8 @@ func (r *Reconciler) Reconcile() (created, deleted int, errs []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Create missing links, in key order so wm-ethN numbering is repeatable
+	// Create missing links in key order, so pushing the same topology to a
+	// fresh webmesh always gives the same wm-ethN numbering
 	keys := make([]string, 0, len(r.desired))
 	for key := range r.desired {
 		keys = append(keys, key)
@@ -120,7 +121,7 @@ func (r *Reconciler) Reconcile() (created, deleted int, errs []string) {
 			continue
 		}
 		a, b := link.Endpoints[0], link.Endpoints[1]
-		if err := r.applyLink(a.Device, a.Port, r.wmNum(a), b.Device, b.Port, r.wmNum(b)); err != nil {
+		if err := r.applyLink(a.Device, a.Port, r.assignWmNum(a), b.Device, b.Port, r.assignWmNum(b)); err != nil {
 			log.Printf("create %s: %v", key, err)
 			errs = append(errs, fmt.Sprintf("create %s: %v", key, err))
 			continue
@@ -274,9 +275,11 @@ func endpointKey(e Endpoint) string {
 	return e.Device + ":" + e.Port
 }
 
-// wmNum returns the N for an endpoint's wm-ethN interface, assigning the
-// lowest unused N on first use. Caller must hold r.mu.
-func (r *Reconciler) wmNum(e Endpoint) int {
+// assignWmNum returns the N for an endpoint's wm-ethN interface, assigning
+// the lowest unused N on first use. Only the create path and loadState
+// assign numbers; everything else looks them up with wmNum.
+// Caller must hold r.mu.
+func (r *Reconciler) assignWmNum(e Endpoint) int {
 	key := endpointKey(e)
 	if n, ok := r.wmNums[key]; ok {
 		return n
@@ -291,6 +294,34 @@ func (r *Reconciler) wmNum(e Endpoint) int {
 	}
 	r.wmNums[key] = n
 	return n
+}
+
+// wmNum returns the N already assigned to an endpoint. Every applied
+// endpoint has one. Caller must hold r.mu.
+func (r *Reconciler) wmNum(e Endpoint) int {
+	return r.wmNums[endpointKey(e)]
+}
+
+// ensureWmNums assigns numbers to applied endpoints that lack one (e.g.
+// from a state file written before wm_nums existed), in link-key order so
+// the result is deterministic. Reports whether any were assigned.
+// Caller must hold r.mu.
+func (r *Reconciler) ensureWmNums() bool {
+	keys := make([]string, 0, len(r.applied))
+	for key := range r.applied {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	assigned := false
+	for _, key := range keys {
+		for _, e := range r.applied[key].Endpoints {
+			if _, ok := r.wmNums[endpointKey(e)]; !ok {
+				r.assignWmNum(e)
+				assigned = true
+			}
+		}
+	}
+	return assigned
 }
 
 // wmNames returns the webmesh-side interface names for a link's endpoints.
@@ -526,6 +557,9 @@ func (r *Reconciler) loadState() {
 	}
 	for k, v := range s.WmNums {
 		r.wmNums[k] = v
+	}
+	if r.ensureWmNums() {
+		r.saveState()
 	}
 	if len(r.applied) > 0 {
 		log.Printf("restored %d applied links from %s", len(r.applied), r.stateFile)

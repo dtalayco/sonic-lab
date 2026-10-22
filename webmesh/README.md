@@ -12,7 +12,7 @@ Each link between two switches uses **two veth pairs** managed by webmesh:
 ```
 Switch A netns          webmesh netns            Switch B netns
 ┌────────────┐      ┌─────────────────────┐      ┌────────────┐
-│ EthernetX  │◄──┐  │ wm-a-X  ═══  wm-b-Y │◄──┐  │ EthernetY  │
+│ EthernetX  │◄──┐  │ wm-ethA ═══ wm-ethB │◄──┐  │ EthernetY  │
 │  (TAP)     │   └─►│(tc ingr)   (tc ingr)│   └─►│  (TAP)     │
 └────────────┘      └─────────────────────┘      └────────────┘
 ```

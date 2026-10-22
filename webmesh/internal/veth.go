@@ -103,14 +103,14 @@ func ifindexByName(name string) (int, error) {
 //
 //   switch A netns       webmesh netns        switch B netns
 //   ┌──────────┐  veth  ┌────────────┐  eBPF ┌────────────┐  veth ┌──────────┐
-//   │  ethN    │◄──────►│ wm-a-x     │◄─────►│ wm-b-y     │◄──────►│  ethM    │
+//   │  ethN    │◄──────►│ wm-ethA    │◄─────►│ wm-ethB    │◄──────►│  ethM    │
 //   └──────────┘        └────────────┘       └────────────┘        └──────────┘
 //
-// The webmesh-side endpoints (wm-a-x, wm-b-y) remain in the webmesh
-// namespace. The switch-side endpoints are moved into the respective
-// switch namespaces and renamed to the SONiC kernel interface names
-// (ethN), which SAI VS maps to logical ports (EthernetN) via the
-// lane-based lanemap.
+// The webmesh-side endpoints (wm-ethA, wm-ethB, numbered per endpoint by
+// the reconciler) remain in the webmesh namespace. The switch-side
+// endpoints are moved into the respective switch namespaces and renamed
+// to the SONiC kernel interface names (ethN), which SAI VS maps to
+// logical ports (EthernetN) via the lane-based lanemap.
 //
 // The operation is idempotent: if either switch-side endpoint already
 // exists in its target namespace, the function returns nil.
