@@ -73,34 +73,34 @@ phase 3 is a file touched inside the Linux containers
 ### 3.1 High-Level Diagram
 
 ```
-                        ┌─────────────────────────────┐
-                        │       webmesh container     │
-                        │  ┌───────────────────────┐  │
-                        │  │   API Server (:9090)  │  │
-                        │  │   (Go, net/http)      │  │
-                        │  └────────┬──────────────┘  │
-                        │           │ manages          │
-                        │  ┌────────▼──────────────┐  │
-                        │  │  eBPF TC Program      │  │
-                        │  │  (patch_panel.o)      │  │
-                        │  │  ┌─────────────────┐  │  │
-                        │  │  │   BPF map      │  │  │
-                        │  │  │  ifidx→peer    │  │  │
-                        │  │  └─────────────────┘  │  │
-                        │  └───────────────────────┘  │
-                        │                             │
-                        │  netns:                     │
-                        │  wm-sp1-e0 ──┐    ┌── wm-l1-e0
-                        │  wm-sp1-e4 ──┤eBPF├── wm-l1-e4
-                        │  wm-sp1-e8 ──┤    └── wm-l2-e0
-                        │  wm-sp1-e12 ─┘         wm-l2-e4
-                        └───┬───────────┬──────────┬──┘
+                        ┌───────────────────────────────┐
+                        │       webmesh container       │
+                        │   ┌───────────────────────┐   │
+                        │   │   API Server (:9090)  │   │
+                        │   │   (Go, net/http)      │   │
+                        │   └────────┬──────────────┘   │
+                        │            │ manages          │
+                        │   ┌────────▼──────────────┐   │
+                        │   │  eBPF TC Program      │   │
+                        │   │  (patch_panel.o)      │   │
+                        │   │  ┌─────────────────┐  │   │
+                        │   │  │   BPF map       │  │   │
+                        │   │  │  ifidx→peer     │  │   │
+                        │   │  └─────────────────┘  │   │
+                        │   └───────────────────────┘   │
+                        │                               │
+                        │ netns:                        │
+                        │ wm-sp1-e0 ──┐    ┌── wm-l1-e0 │
+                        │ wm-sp1-e4 ──┤eBPF├── wm-l1-e4 │
+                        │ wm-sp1-e8 ──┤    └── wm-l2-e0 │
+                        │ wm-sp1-e12 ─┘        wm-l2-e4 │
+                        └───┬───────────┬──────────┬────┘
                             │ veth      │ veth     │ veth
-                       ┌────▼───┐  ┌────▼───┐ ┌───▼────┐
-                       │spine1  │  │ leaf1  │ │ leaf2  │
-                       │(sonic) │  │(sonic) │ │(sonic) │
-                       │Eth0 Eth│  │Eth0Eth4│ │Eth0Eth4│
-                       │4 Eth8  │  └────────┘ └────────┘
+                       ┌────▼───┐  ┌────▼───┐  ┌───▼────┐
+                       │spine1  │  │ leaf1  │  │ leaf2  │
+                       │(sonic) │  │(sonic) │  │(sonic) │
+                       │Eth0 Eth│  │Eth0Eth4│  │Eth0Eth4│
+                       │4 Eth8  │  └────────┘  └────────┘
                        │Eth12   │
                        └────────┘
 ```
@@ -417,19 +417,19 @@ after an API call.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  reconciler.tick()                                     │
-│                                                       │
-│  desired := loadTopology()                             │
-│  actual  := scanWebmeshNetns()  // enumerate veths     │
-│                                                       │
-│  toCreate := desired - actual                          │
-│  toDelete := actual  - desired                         │
-│                                                       │
-│  for each l in toCreate: wireLink(l)                   │
-│  for each l in toDelete: unwireLink(l)                │
-│                                                       │
-│  update BPF map (add new entries, delete old)          │
-│  persist state.json (optional)                         │
+│  reconciler.tick()                                      │
+│                                                         │
+│  desired := loadTopology()                              │
+│  actual  := scanWebmeshNetns()  // enumerate veths      │
+│                                                         │
+│  toCreate := desired - actual                           │
+│  toDelete := actual  - desired                          │
+│                                                         │
+│  for each l in toCreate: wireLink(l)                    │
+│  for each l in toDelete: unwireLink(l)                  │
+│                                                         │
+│  update BPF map (add new entries, delete old)           │
+│  persist state.json (optional)                          │
 └─────────────────────────────────────────────────────────┘
 ```
 

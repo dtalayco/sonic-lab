@@ -1,5 +1,3 @@
-version: "3.9"
-
 x-sonic-common: &sonic-common
   image: docker-sonic-vs:latest
   platform: linux/arm64
@@ -10,9 +8,6 @@ x-sonic-common: &sonic-common
     - seccomp=unconfined
 
 x-debian-common: &debian-common
-  build:
-    context: ..
-    dockerfile: Dockerfile.debian
   image: sonic-lab/debian:latest
   platform: linux/arm64
   privileged: true
@@ -24,9 +19,6 @@ x-debian-common: &debian-common
   shm_size: "2gb"
 
 x-host-common: &host-common
-  build:
-    context: ..
-    dockerfile: Dockerfile.host
   image: sonic-lab/host:latest
   platform: linux/arm64
   privileged: true
@@ -64,6 +56,9 @@ services:
 
   spine1-linux:
     <<: *debian-common
+    build:
+      context: ..
+      dockerfile: Dockerfile.debian
     container_name: spine1-linux
     command: ["bash", "/init_linux.sh", "spine1-linux"]
 

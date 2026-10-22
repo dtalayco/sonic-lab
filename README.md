@@ -57,18 +57,18 @@ flapped at runtime via a REST API.
 ┌──────────────────────────────────────────────────────────────────┐
 │                     webmesh container                            │
 │                                                                  │
-│  ┌────────────┐    ┌─────────────────────────────────────────┐   │
-│  │  API Server │    │         eBPF Patch Panel               │   │
-│  │  (Go/HTTP) │◄──►│  TC ingress on wm-* veth endpoints     │   │
-│  └────────────┘    │  bpf_redirect_peer → remote switch      │   │
-│                     └─────────────────────────────────────────┘   │
+│  ┌─────────────┐    ┌─────────────────────────────────────────┐  │
+│  │  API Server │    │         eBPF Patch Panel                │  │
+│  │  (Go/HTTP)  │◄──►│  TC ingress on wm-* veth endpoints      │  │
+│  └─────────────┘    │  bpf_redirect_peer → remote switch      │  │
+│                     └─────────────────────────────────────────┘  │
 │                                                                  │
 │  netns: webmesh (holds wm-* veth endpoints)                      │
 └──────────────────────────────────────────────────────────────────┘
          │ veth                    │ veth
          ▼                         ▼
 ┌──────────────┐           ┌──────────────┐
-│  spine1 netns │           │  leaf1 netns │
+│ spine1 netns │           │  leaf1 netns │
 │  (SONiC VS)  │           │  (SONiC VS)  │
 └──────────────┘           └──────────────┘
 ```
@@ -80,6 +80,12 @@ This lab is intended to run on macOS using **Colima**, or on Linux. Prebuilt
 [Getting the `docker-sonic-vs` image](#getting-the-docker-sonic-vs-image).
 
 - Docker (via Colima)
+- Docker Compose v2. The commands below use the `docker compose` plugin
+  form. If you installed Compose with `brew install docker-compose`, you may
+  only have the standalone `docker-compose` binary: either substitute
+  `docker-compose` for `docker compose`, or make the plugin available with
+  `mkdir -p ~/.docker/cli-plugins && ln -sfn "$(brew --prefix)/opt/docker-compose/bin/docker-compose" ~/.docker/cli-plugins/docker-compose`.
+  `start.sh` requires the `docker compose` form.
 - At least 8 GB RAM allocated to Colima
 - `clang` is NOT required on the host (BPF is compiled inside the container)
 
@@ -297,10 +303,10 @@ docker compose -f example/docker-compose.yml down && docker rmi sonic-lab/webmes
 Each link uses **two veth pairs**:
 
 ```
-Switch A netns          webmesh netns              Switch B netns
+Switch A netns          webmesh netns            Switch B netns
 ┌────────────┐      ┌─────────────────────┐      ┌────────────┐
-│ EthernetX  │◄──┐  │  wm-a-X  ═══════  wm-b-Y │  ──┐EthernetY│
-│  (TAP)     │   └──│  (tc ingress)  (tc ingress)│  ──┘ (TAP)  │
+│ EthernetX  │◄──┐  │ wm-a-X  ═══  wm-b-Y │◄──┐  │ EthernetY  │
+│  (TAP)     │   └─►│(tc ingr)   (tc ingr)│   └─►│  (TAP)     │
 └────────────┘      └─────────────────────┘      └────────────┘
 ```
 

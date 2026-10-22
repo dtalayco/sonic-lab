@@ -28,6 +28,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"sonic-lab/tgen/internal/topo"
 	"sonic-lab/tgen/internal/writer"
@@ -46,6 +47,7 @@ func main() {
 	hosts := fs.Int("h", 0, "number of hosts attached to each switch")
 	ports := fs.Int("p", 1, "number of ports per host (each port maps to a different switch)")
 	srv6 := fs.Bool("srv6", false, "enable SRv6 overlay (locators, SIDs, seg6 routes)")
+	netnsSuffix := fs.String("base", topo.DefaultNetnsSuffix, "suffix for each switch's backing netns container (spine1-<base>)")
 
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), `tgen — SONiC virtual lab topology generator
@@ -70,6 +72,10 @@ Hosts (optional):
 
 Overlay (optional):
   -srv6       Enable SRv6 overlay (locators, SIDs, seg6 kernel routes)
+
+Naming (optional):
+  -base <str> Suffix for each switch's backing netns container (default
+              "linux", giving spine1-linux, leaf1-linux, ...)
 
 Output:
   -o <dir>    Output directory (default ".", must be a direct child of repo root)
@@ -96,6 +102,12 @@ Examples:
 		HostsPerSwitch: *hosts,
 		PortsPerHost:   *ports,
 		SRv6:           *srv6,
+		NetnsSuffix:    *netnsSuffix,
+	}
+
+	// The netns suffix becomes part of compose service and container names.
+	if !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`).MatchString(*netnsSuffix) {
+		log.Fatalf("invalid -base %q: must start with a letter or digit and contain only letters, digits, '_', '.', or '-'", *netnsSuffix)
 	}
 
 	if opts.Mesh && opts.Ring {

@@ -78,8 +78,6 @@ func (w *Writer) Run() error {
 func (w *Writer) writeCompose() error {
 	var sb strings.Builder
 
-	sb.WriteString("version: \"3.9\"\n\n")
-
 	// Anchors
 	sb.WriteString("x-sonic-common: &sonic-common\n")
 	sb.WriteString("  image: docker-sonic-vs:latest\n")
@@ -90,10 +88,11 @@ func (w *Writer) writeCompose() error {
 	sb.WriteString("  security_opt:\n")
 	sb.WriteString("    - seccomp=unconfined\n\n")
 
+	// The debian and host anchors carry only the image name, not build:.
+	// Each image is built by exactly one service (the first that uses it);
+	// if every service built the same tag, compose would run the builds in
+	// parallel and they would race to create it.
 	sb.WriteString("x-debian-common: &debian-common\n")
-	sb.WriteString("  build:\n")
-	sb.WriteString("    context: ..\n")
-	sb.WriteString("    dockerfile: Dockerfile.debian\n")
 	sb.WriteString("  image: sonic-lab/debian:latest\n")
 	sb.WriteString("  platform: linux/arm64\n")
 	sb.WriteString("  privileged: true\n")
@@ -105,9 +104,6 @@ func (w *Writer) writeCompose() error {
 	sb.WriteString("  shm_size: \"2gb\"\n\n")
 
 	sb.WriteString("x-host-common: &host-common\n")
-	sb.WriteString("  build:\n")
-	sb.WriteString("    context: ..\n")
-	sb.WriteString("    dockerfile: Dockerfile.host\n")
 	sb.WriteString("  image: sonic-lab/host:latest\n")
 	sb.WriteString("  platform: linux/arm64\n")
 	sb.WriteString("  privileged: true\n")
@@ -145,12 +141,15 @@ func (w *Writer) writeCompose() error {
 	sb.WriteString("  # Backing Linux containers #\n")
 	sb.WriteString("  ###########################\n\n")
 
-	for _, sw := range w.Topology.Switches {
-		name := sw.Name
-		sb.WriteString(fmt.Sprintf("  %s-linux:\n", name))
+	for i, sw := range w.Topology.Switches {
+		dev := w.Topology.DeviceNetnsName(sw.Name)
+		sb.WriteString(fmt.Sprintf("  %s:\n", dev))
 		sb.WriteString("    <<: *debian-common\n")
-		sb.WriteString(fmt.Sprintf("    container_name: %s-linux\n", name))
-		sb.WriteString(fmt.Sprintf("    command: [\"bash\", \"/init_linux.sh\", \"%s-linux\"]\n\n", name))
+		if i == 0 {
+			writeBuild(&sb, "Dockerfile.debian")
+		}
+		sb.WriteString(fmt.Sprintf("    container_name: %s\n", dev))
+		sb.WriteString(fmt.Sprintf("    command: [\"bash\", \"/init_linux.sh\", \"%s\"]\n\n", dev))
 	}
 
 	// SONiC containers
@@ -160,15 +159,16 @@ func (w *Writer) writeCompose() error {
 
 	for i, sw := range w.Topology.Switches {
 		name := sw.Name
+		dev := w.Topology.DeviceNetnsName(name)
 		sb.WriteString(fmt.Sprintf("  %s:\n", name))
 		sb.WriteString("    <<: *sonic-common\n")
 		sb.WriteString(fmt.Sprintf("    container_name: sonic-%s\n", name))
 		sb.WriteString("    depends_on:\n")
 		sb.WriteString("      webmesh:\n")
 		sb.WriteString("        condition: service_healthy\n")
-		sb.WriteString(fmt.Sprintf("      %s-linux:\n", name))
+		sb.WriteString(fmt.Sprintf("      %s:\n", dev))
 		sb.WriteString("        condition: service_started\n")
-		sb.WriteString(fmt.Sprintf("    network_mode: \"service:%s-linux\"\n", name))
+		sb.WriteString(fmt.Sprintf("    network_mode: \"service:%s\"\n", dev))
 		sb.WriteString("    volumes:\n")
 		sb.WriteString("      - ./tmp/vnet_ready:/tmp/vnet_ready:ro\n")
 		sb.WriteString(fmt.Sprintf("      - /var/run/redis-vs/%s:/var/run/redis\n", name))
@@ -177,7 +177,7 @@ func (w *Writer) writeCompose() error {
 		if w.Topology.SRv6 && sw.Role != "spine" {
 			sb.WriteString(fmt.Sprintf("      - ./srv6/%s.routes:/srv6.routes:ro\n", name))
 		}
-		sb.WriteString(fmt.Sprintf("    entrypoint: [\"/bin/bash\", \"/sonic_entry.sh\", \"%s-linux\", \"%s\", \"%s\"]\n", name, sw.VtepAddr, sw.OverlayIPv4))
+		sb.WriteString(fmt.Sprintf("    entrypoint: [\"/bin/bash\", \"/sonic_entry.sh\", \"%s\", \"%s\", \"%s\"]\n", dev, sw.VtepAddr, sw.OverlayIPv4))
 		if i < len(w.Topology.Switches)-1 {
 			sb.WriteString("\n")
 		}
@@ -192,6 +192,9 @@ func (w *Writer) writeCompose() error {
 		for i, h := range w.Topology.Hosts {
 			sb.WriteString(fmt.Sprintf("  %s:\n", h.Name))
 			sb.WriteString("    <<: *host-common\n")
+			if i == 0 {
+				writeBuild(&sb, "Dockerfile.host")
+			}
 			sb.WriteString(fmt.Sprintf("    container_name: %s\n", h.Name))
 			if i < len(w.Topology.Hosts)-1 {
 				sb.WriteString("\n")
@@ -200,6 +203,13 @@ func (w *Writer) writeCompose() error {
 	}
 
 	return os.WriteFile(filepath.Join(w.OutputDir, "docker-compose.yml"), []byte(sb.String()), 0o644)
+}
+
+// writeBuild emits a service-level build: block for a Dockerfile at the repo root.
+func writeBuild(sb *strings.Builder, dockerfile string) {
+	sb.WriteString("    build:\n")
+	sb.WriteString("      context: ..\n")
+	sb.WriteString(fmt.Sprintf("      dockerfile: %s\n", dockerfile))
 }
 
 // --- topology.yml (consumed by webmesh) ---
@@ -493,21 +503,20 @@ type neighborInfo struct {
 // for the given switch, excluding host connections.
 func (w *Writer) switchNeighbors(sw topo.Switch) []neighborInfo {
 	var result []neighborInfo
-	swLinuxName := sw.Name + "-linux"
+	swDevice := w.Topology.DeviceNetnsName(sw.Name)
 
 	for _, link := range w.Topology.Links {
 		var local, peer *topo.Endpoint
-		if link.A.Device == swLinuxName {
+		if link.A.Device == swDevice {
 			local, peer = &link.A, &link.B
-		} else if link.B.Device == swLinuxName {
+		} else if link.B.Device == swDevice {
 			local, peer = &link.B, &link.A
 		} else {
 			continue
 		}
 
 		// Only include links to other switches, not hosts.
-		peerName := strings.TrimSuffix(peer.Device, "-linux")
-		peerSwitch, ok := w.findSwitch(peerName)
+		peerSwitch, ok := w.findSwitchByDevice(peer.Device)
 		if !ok {
 			continue
 		}
@@ -521,10 +530,11 @@ func (w *Writer) switchNeighbors(sw topo.Switch) []neighborInfo {
 	return result
 }
 
-// findSwitch looks up a switch by name in the topology.
-func (w *Writer) findSwitch(name string) (*topo.Switch, bool) {
+// findSwitchByDevice returns the switch whose backing netns container is dev.
+// Host endpoints don't match any switch.
+func (w *Writer) findSwitchByDevice(dev string) (*topo.Switch, bool) {
 	for i := range w.Topology.Switches {
-		if w.Topology.Switches[i].Name == name {
+		if w.Topology.DeviceNetnsName(w.Topology.Switches[i].Name) == dev {
 			return &w.Topology.Switches[i], true
 		}
 	}
