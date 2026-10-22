@@ -62,13 +62,14 @@ func (a *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 // --- /v1/links ---
 
 type LinksResponse struct {
-	Links []Link `json:"links"`
+	Links      []Link            `json:"links"`
+	Interfaces map[string]string `json:"interfaces,omitempty"` // wm-ethN → "device:port"
 }
 
 func (a *API) handleLinks(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, LinksResponse{Links: a.rec.AppliedLinks()})
+		writeJSON(w, http.StatusOK, LinksResponse{Links: a.rec.AppliedLinks(), Interfaces: a.rec.Interfaces()})
 	case http.MethodPost:
 		var link Link
 		if err := json.NewDecoder(r.Body).Decode(&link); err != nil {

@@ -147,7 +147,15 @@ go build -o webmeshctl ./cmd/webmeshctl
 
 # List all wired links
 ./webmeshctl links
+
+# Also show each endpoint's webmesh-side interface
+./webmeshctl links -v
 ```
+
+Inside the webmesh container, each link endpoint is a veth named `wm-ethN`,
+numbered in the order links are first created. `ip -d link show wm-ethN`
+shows the endpoint it connects to as the interface alias, and
+`GET /v1/links` returns the full map under `interfaces`.
 
 ## Build
 

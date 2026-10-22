@@ -232,3 +232,63 @@ func TestVerifyLinksRemovesMissingInterfaces(t *testing.T) {
 		t.Logf("AppliedCount = %d (expected 1 if containerPID failed, 0 if containers exist but links don't)", count)
 	}
 }
+
+func TestWmNumAllocation(t *testing.T) {
+	r := newTestReconciler(t)
+	a := Endpoint{Device: "spine1-a-very-long-suffix", Port: "Ethernet60"}
+	b := Endpoint{Device: "leaf1-linux", Port: "Ethernet0"}
+	c := Endpoint{Device: "leaf2-linux", Port: "Ethernet0"}
+
+	if n := r.wmNum(a); n != 0 {
+		t.Errorf("wmNum(a) = %d, want 0", n)
+	}
+	if n := r.wmNum(b); n != 1 {
+		t.Errorf("wmNum(b) = %d, want 1", n)
+	}
+	if n := r.wmNum(a); n != 0 {
+		t.Errorf("wmNum(a) again = %d, want stable 0", n)
+	}
+
+	// a is neither desired nor applied, so pruning frees 0 for reuse
+	r.desired["b-c"] = Link{ID: "b-c", Endpoints: []Endpoint{b, c}}
+	r.pruneWmNums()
+	if _, ok := r.wmNums[endpointKey(a)]; ok {
+		t.Error("prune kept unused endpoint a")
+	}
+	if n := r.wmNum(c); n != 0 {
+		t.Errorf("wmNum(c) = %d, want reused 0", n)
+	}
+	if n := r.wmNum(b); n != 1 {
+		t.Errorf("wmNum(b) after prune = %d, want 1", n)
+	}
+}
+
+func TestWmNumsPersisted(t *testing.T) {
+	dir := t.TempDir()
+	stateFile := filepath.Join(dir, "state.json")
+	r := NewReconciler(stateFile, "", time.Hour, nil)
+	l := Link{Endpoints: []Endpoint{
+		{Device: "spine1-net", Port: "Ethernet40"},
+		{Device: "leaf3-net", Port: "Ethernet8"},
+	}}
+	r.mu.Lock()
+	r.applied[l.Key()] = l
+	r.wmNum(l.Endpoints[1]) // assign out of order so B gets 0
+	r.saveState()
+	r.mu.Unlock()
+
+	r2 := NewReconciler(stateFile, "", time.Hour, nil)
+	want := map[string]string{
+		"wm-eth0": "leaf3-net:Ethernet8",
+		"wm-eth1": "spine1-net:Ethernet40",
+	}
+	got := r2.Interfaces()
+	if len(got) != len(want) {
+		t.Fatalf("Interfaces() = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("Interfaces()[%q] = %q, want %q", k, got[k], v)
+		}
+	}
+}

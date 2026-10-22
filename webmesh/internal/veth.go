@@ -14,31 +14,16 @@ import (
 	"strings"
 )
 
-// maxIfnameLen is the longest interface name Linux accepts (IFNAMSIZ - 1).
-const maxIfnameLen = 15
-
-// baseName strips the netns suffix from a device name, e.g.
-// spine1-linux or spine1-net → spine1. Names without a '-' are unchanged.
-func baseName(dev string) string {
-	if i := strings.LastIndex(dev, "-"); i > 0 {
-		return dev[:i]
-	}
-	return dev
-}
-
-// wmIfname generates the webmesh-side veth endpoint name.
-// Convention: "wm-" + base device name + "-" + port number.
-// e.g. spine1-linux + Ethernet0 → "wm-spine1-0"
-func wmIfname(dev, port string) string {
-	portNum := strings.TrimPrefix(port, "Ethernet")
-	return "wm-" + baseName(dev) + "-" + portNum
+// wmIfname returns the webmesh-side veth endpoint name for interface n,
+// e.g. 3 → "wm-eth3". The reconciler assigns n per endpoint.
+func wmIfname(n int) string {
+	return "wm-eth" + strconv.Itoa(n)
 }
 
 // swIfname generates the temporary name for the switch-side veth endpoint
 // before it is moved into the target namespace and renamed.
-func swIfname(dev, port string) string {
-	portNum := strings.TrimPrefix(port, "Ethernet")
-	return "sw-" + baseName(dev) + "-" + portNum
+func swIfname(n int) string {
+	return "sw-eth" + strconv.Itoa(n)
 }
 
 // containerPID returns the host PID of the init process of the named container.
@@ -93,7 +78,7 @@ func ifindexByName(name string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("ip link show %s: %w", name, err)
 	}
-	// The JSON output is a single object: {"ifindex":3,"ifname":"wm-spine1-0",...}
+	// The JSON output is a single object: {"ifindex":3,"ifname":"wm-eth0",...}
 	// Parse minimally: find "ifindex":N
 	s := string(out)
 	key := `"ifindex":`
@@ -129,7 +114,7 @@ func ifindexByName(name string) (int, error) {
 //
 // The operation is idempotent: if either switch-side endpoint already
 // exists in its target namespace, the function returns nil.
-func createLink(devA, portA, devB, portB string) error {
+func createLink(devA, portA string, nA int, devB, portB string, nB int) error {
 	pidA, err := containerPID(devA)
 	if err != nil {
 		return fmt.Errorf("resolve %s: %w", devA, err)
@@ -148,15 +133,10 @@ func createLink(devA, portA, devB, portB string) error {
 		return nil
 	}
 
-	wmA := wmIfname(devA, portA)
-	swA := swIfname(devA, portA)
-	wmB := wmIfname(devB, portB)
-	swB := swIfname(devB, portB)
-	for _, n := range []string{wmA, swA, wmB, swB} {
-		if len(n) > maxIfnameLen {
-			return fmt.Errorf("veth name %q exceeds %d chars; use shorter device names", n, maxIfnameLen)
-		}
-	}
+	wmA := wmIfname(nA)
+	swA := swIfname(nA)
+	wmB := wmIfname(nB)
+	swB := swIfname(nB)
 
 	// --- Veth pair A: webmesh ↔ switch A ---
 	if err := run("ip", "link", "add", wmA, "type", "veth", "peer", "name", swA); err != nil {
@@ -191,6 +171,10 @@ func createLink(devA, portA, devB, portB string) error {
 		return fmt.Errorf("rename %s→%s in %s: %w", swB, kb, devB, err)
 	}
 
+	// Label the webmesh-side endpoints so `ip link` shows what they connect to
+	runQuiet("ip", "link", "set", wmA, "alias", devA+":"+portA)
+	runQuiet("ip", "link", "set", wmB, "alias", devB+":"+portB)
+
 	// Bring up all four endpoints (best-effort)
 	runQuiet("ip", "link", "set", wmA, "up")
 	runQuiet("ip", "link", "set", wmB, "up")
@@ -205,9 +189,9 @@ func createLink(devA, portA, devB, portB string) error {
 // deleteLink removes both veth pairs for a link.
 // Deleting the webmesh-side endpoint also deletes the switch-side peer,
 // which causes the SONiC interface to go down.
-func deleteLink(devA, portA, devB, portB string) error {
-	wmA := wmIfname(devA, portA)
-	wmB := wmIfname(devB, portB)
+func deleteLink(devA, portA string, nA int, devB, portB string, nB int) error {
+	wmA := wmIfname(nA)
+	wmB := wmIfname(nB)
 
 	// Delete webmesh-side endpoints (peers in switch ns are removed too)
 	runQuiet("ip", "link", "set", wmA, "down")

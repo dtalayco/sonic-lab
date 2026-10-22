@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +27,7 @@ type Reconciler struct {
 	desired      map[string]Link
 	applied      map[string]Link
 	linkStates   map[string]bool // key → true=up, false=down
+	wmNums       map[string]int  // endpoint "device:port" → N in its wm-ethN name
 	stateFile    string
 	topologyFile string
 	topoMtime    time.Time
@@ -41,6 +43,7 @@ func NewReconciler(stateFile, topologyFile string, interval time.Duration, panel
 		desired:      make(map[string]Link),
 		applied:      make(map[string]Link),
 		linkStates:   make(map[string]bool),
+		wmNums:       make(map[string]int),
 		stateFile:    stateFile,
 		topologyFile: topologyFile,
 		interval:     interval,
@@ -105,13 +108,19 @@ func (r *Reconciler) Reconcile() (created, deleted int, errs []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Create missing links
-	for key, link := range r.desired {
+	// Create missing links, in key order so wm-ethN numbering is repeatable
+	keys := make([]string, 0, len(r.desired))
+	for key := range r.desired {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		link := r.desired[key]
 		if _, ok := r.applied[key]; ok {
 			continue
 		}
 		a, b := link.Endpoints[0], link.Endpoints[1]
-		if err := r.applyLink(a.Device, a.Port, b.Device, b.Port); err != nil {
+		if err := r.applyLink(a.Device, a.Port, r.wmNum(a), b.Device, b.Port, r.wmNum(b)); err != nil {
 			log.Printf("create %s: %v", key, err)
 			errs = append(errs, fmt.Sprintf("create %s: %v", key, err))
 			continue
@@ -126,8 +135,8 @@ func (r *Reconciler) Reconcile() (created, deleted int, errs []string) {
 			continue
 		}
 		a, b := link.Endpoints[0], link.Endpoints[1]
-		r.unapplyLink(a.Device, a.Port, b.Device, b.Port)
-		if err := deleteLink(a.Device, a.Port, b.Device, b.Port); err != nil {
+		r.unapplyLink(r.wmNames(link))
+		if err := deleteLink(a.Device, a.Port, r.wmNum(a), b.Device, b.Port, r.wmNum(b)); err != nil {
 			log.Printf("delete %s: %v", key, err)
 			errs = append(errs, fmt.Sprintf("delete %s: %v", key, err))
 			continue
@@ -135,6 +144,8 @@ func (r *Reconciler) Reconcile() (created, deleted int, errs []string) {
 		delete(r.applied, key)
 		deleted++
 	}
+
+	r.pruneWmNums()
 
 	// Drift correction: verify applied links are actually UP
 	r.verifyLinks()
@@ -172,15 +183,14 @@ func (r *Reconciler) verifyLinks() {
 		// Check if interfaces exist; if not, mark for re-creation
 		if !linkInNS(pidA, ka) || !linkInNS(pidB, kb) {
 			log.Printf("verify: link %s interfaces missing, will re-create", key)
-			r.unapplyLink(a.Device, a.Port, b.Device, b.Port)
+			r.unapplyLink(r.wmNames(link))
 			delete(r.applied, key)
 			r.saveState()
 			continue
 		}
 
 		// Interfaces exist; ensure they are UP
-		wmA := wmIfname(a.Device, a.Port)
-		wmB := wmIfname(b.Device, b.Port)
+		wmA, wmB := r.wmNames(link)
 
 		needUp := false
 		if !linkIsUp(pidA, ka) {
@@ -202,8 +212,8 @@ func (r *Reconciler) verifyLinks() {
 
 // applyLink creates the veth pairs and (if eBPF is available) configures
 // the BPF map and TC attachments.
-func (r *Reconciler) applyLink(devA, portA, devB, portB string) error {
-	if err := createLink(devA, portA, devB, portB); err != nil {
+func (r *Reconciler) applyLink(devA, portA string, nA int, devB, portB string, nB int) error {
+	if err := createLink(devA, portA, nA, devB, portB, nB); err != nil {
 		return err
 	}
 
@@ -212,8 +222,8 @@ func (r *Reconciler) applyLink(devA, portA, devB, portB string) error {
 		return nil
 	}
 
-	wmA := wmIfname(devA, portA)
-	wmB := wmIfname(devB, portB)
+	wmA := wmIfname(nA)
+	wmB := wmIfname(nB)
 
 	ifIdxA, err := ifindexByName(wmA)
 	if err != nil {
@@ -240,13 +250,10 @@ func (r *Reconciler) applyLink(devA, portA, devB, portB string) error {
 
 // unapplyLink detaches TC and removes BPF map entries before the veths
 // are deleted.
-func (r *Reconciler) unapplyLink(devA, portA, devB, portB string) {
+func (r *Reconciler) unapplyLink(wmA, wmB string) {
 	if r.panel == nil {
 		return
 	}
-
-	wmA := wmIfname(devA, portA)
-	wmB := wmIfname(devB, portB)
 
 	idxA, aErr := ifindexByName(wmA)
 	idxB, bErr := ifindexByName(wmB)
@@ -260,6 +267,68 @@ func (r *Reconciler) unapplyLink(devA, portA, devB, portB string) {
 	if aErr == nil && bErr == nil {
 		r.panel.RemoveLink(uint32(idxA), uint32(idxB))
 	}
+}
+
+// endpointKey identifies an endpoint in wmNums.
+func endpointKey(e Endpoint) string {
+	return e.Device + ":" + e.Port
+}
+
+// wmNum returns the N for an endpoint's wm-ethN interface, assigning the
+// lowest unused N on first use. Caller must hold r.mu.
+func (r *Reconciler) wmNum(e Endpoint) int {
+	key := endpointKey(e)
+	if n, ok := r.wmNums[key]; ok {
+		return n
+	}
+	used := make(map[int]bool, len(r.wmNums))
+	for _, n := range r.wmNums {
+		used[n] = true
+	}
+	n := 0
+	for used[n] {
+		n++
+	}
+	r.wmNums[key] = n
+	return n
+}
+
+// wmNames returns the webmesh-side interface names for a link's endpoints.
+// Caller must hold r.mu.
+func (r *Reconciler) wmNames(l Link) (string, string) {
+	return wmIfname(r.wmNum(l.Endpoints[0])), wmIfname(r.wmNum(l.Endpoints[1]))
+}
+
+// pruneWmNums frees the numbers of endpoints that are neither desired nor
+// applied. Caller must hold r.mu.
+func (r *Reconciler) pruneWmNums() {
+	inUse := make(map[string]bool)
+	for _, set := range []map[string]Link{r.desired, r.applied} {
+		for _, l := range set {
+			for _, e := range l.Endpoints {
+				inUse[endpointKey(e)] = true
+			}
+		}
+	}
+	for key := range r.wmNums {
+		if !inUse[key] {
+			delete(r.wmNums, key)
+		}
+	}
+}
+
+// Interfaces maps each applied link's webmesh-side interface name to the
+// endpoint it connects to, e.g. "wm-eth0" → "spine1-linux:Ethernet0".
+func (r *Reconciler) Interfaces() map[string]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]string, 2*len(r.applied))
+	for _, l := range r.applied {
+		for _, e := range l.Endpoints {
+			out[wmIfname(r.wmNum(e))] = endpointKey(e)
+		}
+	}
+	return out
 }
 
 // checkTopoFile records the current mtime of the topology file so that
@@ -402,6 +471,10 @@ type LinkStatsResponse struct {
 func (r *Reconciler) GetLinkStats(key string) (LinkStatsResponse, error) {
 	r.mu.Lock()
 	link, ok := r.applied[key]
+	var wmA, wmB string
+	if ok {
+		wmA, wmB = r.wmNames(link)
+	}
 	r.mu.Unlock()
 	if !ok {
 		return LinkStatsResponse{}, fmt.Errorf("link %q not found in applied set", key)
@@ -409,10 +482,6 @@ func (r *Reconciler) GetLinkStats(key string) (LinkStatsResponse, error) {
 	if r.panel == nil {
 		return LinkStatsResponse{}, fmt.Errorf("eBPF not loaded")
 	}
-
-	a, b := link.Endpoints[0], link.Endpoints[1]
-	wmA := wmIfname(a.Device, a.Port)
-	wmB := wmIfname(b.Device, b.Port)
 
 	ifIdxA, err := ifindexByName(wmA)
 	if err != nil {
@@ -441,6 +510,7 @@ func (r *Reconciler) loadState() {
 	var s struct {
 		Applied    []Link          `json:"applied"`
 		LinkStates map[string]bool `json:"link_states,omitempty"`
+		WmNums     map[string]int  `json:"wm_nums,omitempty"`
 	}
 	if err := json.Unmarshal(data, &s); err != nil {
 		log.Printf("warning: could not parse state file %s: %v", r.stateFile, err)
@@ -453,6 +523,9 @@ func (r *Reconciler) loadState() {
 		for k, v := range s.LinkStates {
 			r.linkStates[k] = v
 		}
+	}
+	for k, v := range s.WmNums {
+		r.wmNums[k] = v
 	}
 	if len(r.applied) > 0 {
 		log.Printf("restored %d applied links from %s", len(r.applied), r.stateFile)
@@ -476,7 +549,8 @@ func (r *Reconciler) saveState() {
 	s := struct {
 		Applied    []Link          `json:"applied"`
 		LinkStates map[string]bool `json:"link_states,omitempty"`
-	}{Applied: links, LinkStates: states}
+		WmNums     map[string]int  `json:"wm_nums,omitempty"`
+	}{Applied: links, LinkStates: states, WmNums: r.wmNums}
 
 	data, _ := json.MarshalIndent(s, "", "  ")
 	_ = os.WriteFile(r.stateFile, data, 0o644)

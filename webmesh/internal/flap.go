@@ -24,11 +24,8 @@ func (r *Reconciler) SetLinkDown(key string) error {
 	}
 	r.linkStates[key] = false
 	r.saveState()
+	wmA, wmB := r.wmNames(link)
 	r.mu.Unlock()
-
-	a, b := link.Endpoints[0], link.Endpoints[1]
-	wmA := wmIfname(a.Device, a.Port)
-	wmB := wmIfname(b.Device, b.Port)
 
 	if err := setLinkDown(wmA); err != nil {
 		log.Printf("flap down %s: %v", wmA, err)
@@ -56,11 +53,8 @@ func (r *Reconciler) SetLinkUp(key string) error {
 	}
 	r.linkStates[key] = true
 	r.saveState()
+	wmA, wmB := r.wmNames(link)
 	r.mu.Unlock()
-
-	a, b := link.Endpoints[0], link.Endpoints[1]
-	wmA := wmIfname(a.Device, a.Port)
-	wmB := wmIfname(b.Device, b.Port)
 
 	if err := setLinkUp(wmA); err != nil {
 		log.Printf("flap up %s: %v", wmA, err)
