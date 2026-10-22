@@ -9,8 +9,13 @@
 # at a time and no other lab may be running.
 #
 # Usage: tests/smoke1.sh [-k] [topology ...]
+#        tests/smoke1.sh -c
 #   -k          on failure, leave the failed lab running for debugging
+#   -c          clean up: stop any smoke labs, remove their directories and
+#               the sonic-lab/* images, then exit
 #   topology    spine-leaf, ring, mesh (default: all three)
+#
+# Can be run from any directory.
 #
 # Environment:
 #   UP_TIMEOUT   seconds to wait for webmesh healthy (default 300)
@@ -33,11 +38,33 @@ topo_args() {
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
+# clean_all removes everything a run (or an interrupted run) can leave
+# behind. Images still used by another lab's containers are kept.
+clean_all() {
+	local p img
+	for p in $(docker ps -a --format '{{.Label "com.docker.compose.project"}}' | grep '^smoke-' | sort -u); do
+		log "stopping lab $p"
+		docker compose -p "$p" down -v --remove-orphans >/dev/null 2>&1 || true
+	done
+	rm -rf "$ROOT"/smoke-*/
+	for img in sonic-lab/webmesh:latest sonic-lab/debian:latest sonic-lab/host:latest; do
+		docker image inspect "$img" >/dev/null 2>&1 || continue
+		if docker image rm "$img" >/dev/null 2>&1; then
+			log "removed image $img"
+		else
+			log "kept image $img (in use by another lab's containers)"
+		fi
+	done
+	log "clean"
+}
+
 KEEP=0
-while getopts k opt; do
+CLEAN=0
+while getopts kc opt; do
 	case "$opt" in
 	k) KEEP=1 ;;
-	*) sed -n '2,17p' "$0"; exit 2 ;;
+	c) CLEAN=1 ;;
+	*) sed -n '2,22p' "$0"; exit 2 ;;
 	esac
 done
 shift $((OPTIND - 1))
@@ -48,6 +75,10 @@ done
 
 # --- Preflight ---
 docker info >/dev/null 2>&1 || { echo "docker is not running (try: colima start)"; exit 1; }
+if [ "$CLEAN" = 1 ]; then
+	clean_all
+	exit 0
+fi
 docker compose version >/dev/null 2>&1 || { echo "'docker compose' (v2) is required"; exit 1; }
 docker image inspect docker-sonic-vs:latest >/dev/null 2>&1 ||
 	{ echo "image docker-sonic-vs:latest not found; see sonic-patches/README.md"; exit 1; }
@@ -62,7 +93,7 @@ LAB=""
 cleanup() {
 	if [ -n "$LAB" ]; then
 		if [ "$KEEP" = 1 ]; then
-			log "leaving $LAB running (-k); stop it with: docker compose -f $LAB/docker-compose.yml down -v"
+			log "leaving $LAB running (-k); clean up with: $0 -c"
 		else
 			docker compose -f "$LAB/docker-compose.yml" down -v --remove-orphans >/dev/null 2>&1 || true
 			rm -rf "$LAB"
