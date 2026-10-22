@@ -146,16 +146,18 @@ jobs:
             container="sonic-$sw"
 
             # Poll until every declared session is established (max ~5 min).
-            # "Establ" is FRR's summary marker and a prefix of "Established",
-            # so this counts established neighbors in either view.
+            # `show bgp summary` lists each neighbor once: an established peer
+            # shows a number in its State/PfxRcd column (field 10), a down peer
+            # a BGP FSM state word; newer FRR prints the literal "Establ". So
+            # "established" == field 10 all-digits, or the row carries "Establ".
             ok=0
             for i in $(seq 1 60); do
-              actual=$(docker exec "$container" vtysh -c "show bgp summary" 2>/dev/null | grep -c "Establ")
+              actual=$(docker exec "$container" vtysh -c "show bgp summary" 2>/dev/null | awk '$10 ~ /^[0-9]+$/ || /Establ/ {n++} END {print n+0}')
               if [ "${actual:-0}" -ge "$expected" ]; then ok=1; break; fi
               sleep 5
             done
 
-            actual=$(docker exec "$container" vtysh -c "show bgp summary" 2>/dev/null | grep -c "Establ")
+            actual=$(docker exec "$container" vtysh -c "show bgp summary" 2>/dev/null | awk '$10 ~ /^[0-9]+$/ || /Establ/ {n++} END {print n+0}')
             echo "$container: ${actual:-0}/${expected} BGP sessions established"
             if [ "$ok" -ne 1 ]; then
               echo "FAIL: $container only established ${actual:-0}/${expected} BGP sessions"
