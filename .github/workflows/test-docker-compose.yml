@@ -150,16 +150,16 @@ jobs:
             # so this counts established neighbors in either view.
             ok=0
             for i in $(seq 1 60); do
-              actual=$(docker exec -T "$container" vtysh -c "show ipv6 bgp summary" 2>/dev/null | grep -c "Establ")
+              actual=$(docker exec "$container" vtysh -c "show ipv6 bgp summary" 2>/dev/null | grep -c "Establ")
               if [ "${actual:-0}" -ge "$expected" ]; then ok=1; break; fi
               sleep 5
             done
 
-            actual=$(docker exec -T "$container" vtysh -c "show ipv6 bgp summary" 2>/dev/null | grep -c "Establ")
+            actual=$(docker exec "$container" vtysh -c "show ipv6 bgp summary" 2>/dev/null | grep -c "Establ")
             echo "$container: ${actual:-0}/${expected} BGP sessions established"
             if [ "$ok" -ne 1 ]; then
               echo "FAIL: $container only established ${actual:-0}/${expected} BGP sessions"
-              docker exec -T "$container" vtysh -c "show ipv6 bgp summary" || true
+              docker exec "$container" vtysh -c "show ipv6 bgp summary" || true
               exit 1
             fi
           done
