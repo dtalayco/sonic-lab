@@ -158,6 +158,7 @@ func cmdPush(args []string) {
 func cmdLinks(args []string) {
 	fs := flag.NewFlagSet("links", flag.ExitOnError)
 	url := fs.String("url", defaultURL, "webmesh API URL; if not set, tries :9090 then :8092")
+	verbose := fs.Bool("v", false, "also show each endpoint's webmesh interface (wm-ethN)")
 	fs.Parse(args)
 
 	base := resolveURL(candidateURLs(fs, *url))
@@ -174,14 +175,27 @@ func cmdLinks(args []string) {
 				Port   string `json:"port"`
 			} `json:"endpoints"`
 		} `json:"links"`
+		Interfaces map[string]string `json:"interfaces"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		log.Fatalf("decoding response: %v", err)
 	}
+	wmByEndpoint := make(map[string]string, len(body.Interfaces))
+	for wm, ep := range body.Interfaces {
+		wmByEndpoint[ep] = wm
+	}
 	for _, l := range body.Links {
-		if len(l.Endpoints) == 2 {
-			fmt.Printf("%s:%s <-> %s:%s\n", l.Endpoints[0].Device, l.Endpoints[0].Port, l.Endpoints[1].Device, l.Endpoints[1].Port)
+		if len(l.Endpoints) != 2 {
+			continue
 		}
+		var ends [2]string
+		for i, e := range l.Endpoints {
+			ends[i] = e.Device + ":" + e.Port
+			if *verbose {
+				ends[i] += " (" + wmByEndpoint[ends[i]] + ")"
+			}
+		}
+		fmt.Printf("%s <-> %s\n", ends[0], ends[1])
 	}
 }
 
