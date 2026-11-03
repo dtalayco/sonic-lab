@@ -201,7 +201,8 @@ Base URL: `http://localhost:8092`
 | `/v1/links/{key}` | GET | Inspect a single link |
 | `/v1/links/{key}/up` | POST | Bring a link up |
 | `/v1/links/{key}/down` | POST | Take a link down (flap) |
-| `/v1/stats` | GET | Aggregate eBPF stats |
+| `/v1/stats` | GET | Snapshot of every link's state and eBPF packet/byte counters |
+| `/metrics` | GET | The same counters in Prometheus text format |
 | `/v1/health` | GET | Healthcheck (desired == applied) |
 
 ### Example: Flap a link
