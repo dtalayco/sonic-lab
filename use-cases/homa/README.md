@@ -59,6 +59,27 @@ docker compose down
 Restart the whole lab rather than single containers: webmesh doesn't
 rewire a link when only one end restarts.
 
+## Watching and recording
+
+The webmesh dashboard at http://localhost:8092 shows live throughput per
+link while tests run.
+
+To keep a record, `lab/run.sh -r NAME` runs `collect.py` in the VM for the
+duration and writes `runs/<time>-NAME/`:
+
+| File | Contents |
+|---|---|
+| `samples.jsonl` | One line per second: raw counters from webmesh, Homa and any `--tc` qdiscs |
+| `events.jsonl` | Start and end of each test phase, with `cp_node` results |
+| `report.html` | Phases, total and per-link throughput, queues, Homa resends and timeouts |
+
+Samples use Prometheus names and labels, and stay raw counters, so runs
+can be compared or loaded elsewhere later. `report.py RUN_DIR --openmetrics`
+writes `samples.om` for `promtool tsdb create-blocks-from openmetrics`.
+
+Collection costs CPU in a simulation that is already CPU-bound, so keep
+the interval at a second or more for runs you want to compare.
+
 ## Files
 
 | File | What it does |
@@ -71,6 +92,8 @@ rewire a link when only one end restarts.
 | `bridge.sh` | Stage 2: four namespaces on a Linux bridge, no link model |
 | `bottleneck.sh` | Stage 2 with 2 Gbps links, comparing a FIFO switch queue with 8 DSCP priority bands |
 | `lab/` | Stage 3: hand-written lab with one SONiC switch and four hosts on VLAN 10; `run.sh` runs the stage 2 tests across it |
+| `collect.py` | Samples counters once a second into a JSON-lines file; runs in the VM |
+| `report.py`, `report.html.in` | Builds an HTML report, or an OpenMetrics export, from a recorded run |
 
 The workload is Homa's own `cp_node`, which runs the same traffic over
 Homa or TCP (`--protocol`). `w4` is a message size distribution from the
