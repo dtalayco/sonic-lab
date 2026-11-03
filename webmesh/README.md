@@ -62,8 +62,10 @@ Base URL: `http://localhost:8092` (host-mapped from container port 9090)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/` | GET | Web dashboard (auto-refreshes every 2s) |
+| `/` | GET | Web dashboard with live per-link throughput |
 | `/v1/status` | GET | Healthcheck: `{"healthy":true,"desired":N,"applied":N}` |
+| `/v1/stats` | GET | Timestamped snapshot of every link's state and raw packet/byte counters |
+| `/metrics` | GET | The same counters in Prometheus text format |
 | `/v1/topology` | GET | Current desired topology |
 | `/v1/topology` | PUT | Replace desired topology (YAML or JSON body) |
 | `/v1/links` | GET | List all links with state + per-link stats |

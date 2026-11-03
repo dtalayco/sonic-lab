@@ -31,6 +31,8 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("/v1/links", a.handleLinks)
 	mux.HandleFunc("/v1/links/", a.handleLinkKey)
 	mux.HandleFunc("/v1/topology", a.handleTopology)
+	mux.HandleFunc("/v1/stats", a.handleStats)
+	mux.HandleFunc("/metrics", a.handleMetrics)
 	return mux
 }
 
