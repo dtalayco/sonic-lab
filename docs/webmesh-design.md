@@ -1,21 +1,33 @@
 # Webmesh: eBPF Patch Panel for SONiC VS Lab
 
-## 1. Executive Summary
+## 1. Summary
 
-This document proposes a new intermediary container, **webmesh**, that acts as a
-centralized patch panel for all inter-switch veth wiring in the SONiC virtual
-lab. The webmesh container runs two components:
+This document discusses the **webmesh** container. In the sonic-lab architecture, webmesh acts as a centralized patch panel for all veth wiring between simulated devices. For each interface in the system, a veth pair is created with one endpoint attached to the device's container and the other endpoint to the webmesh container. Webmesh implements a patch panel allowing dynamic connections between arbitrary endpoints.
 
-1. **An eBPF data plane** — a TC (traffic-control) program that forwards
-   packets between paired veth endpoints living in the webmesh network
-   namespace. Forwarding rules are stored in a BPF hash map and can be
-   updated at runtime without touching any network devices.
+System interfaces are identified by the triple (lab-instance, device, interface). For example (lab1, leaf1-ns, Ethernet4). The webmesh container manages the following:
 
-2. **A REST API server** — a small HTTP service that accepts topology
-   descriptions (the same YAML the outer Go tool already parses) and
-   reconciles the actual veth/eBPF state to match.
+1. **The connection matrix** — The set of system connections. 
+This is a set of pairs of system interfaces for which a connection 
+is intended. Eg connect (leaf1, Ethernet0) to (spine1, Ethernet4). 
+The connectivity is implemented by a TC ingress eBPF program which
+provides the definitive current state of the connections. Note this
+connectivity is implemented via the webmesh namespace veth endpoint
+names, so it must be translated through the interface name map (below).
 
-The outer `sonic-lab` Go program becomes a thin orchestrator: it starts
+2. **The interface name map** - A map between system interface 
+identifiers and the corresponding veth endpoint names used in the webmesh 
+container.
+
+3. **Intended interface state** - Controls whether the link status
+for an interface should be up or down, independent of it's connection
+state. In general, webmesh should be used to manage the "real" state
+of the interface, although in practice there may be conflicts device
+containers setting the interface state.
+
+3. **A REST API server** — a small HTTP service for adding,
+updating, and removing connections. It also shows status and counters.
+
+The outer `sonic-lab` Go program is a thin orchestrator: it starts
 containers, waits for the webmesh API to be healthy, pushes the desired
 topology, and starts SONiC. The manual `colima ssh sudo ./create_vnet.sh`
 step is eliminated entirely.
