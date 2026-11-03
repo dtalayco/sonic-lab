@@ -1,0 +1,34 @@
+diff --git a/util/cp_node.cc b/util/cp_node.cc
+--- a/util/cp_node.cc
++++ b/util/cp_node.cc
+@@ -3659,7 +3659,11 @@ void error_handler(int signal, siginfo_t* info, void* ucontext)
+ {
+ 	ucontext_t* uc = static_cast<ucontext_t*>(ucontext);
+ 	void* caller_address = reinterpret_cast<void*>(
++#ifdef __aarch64__
++			uc->uc_mcontext.pc);
++#else
+ 			uc->uc_mcontext.gregs[REG_RIP]);
++#endif
+
+ 	log(NORMAL, "ERROR: Signal %d (%s) at address %p from %p\n",
+ 			signal, strsignal(signal), info->si_addr,
+diff --git a/util/test_utils.h b/util/test_utils.h
+--- a/util/test_utils.h
++++ b/util/test_utils.h
+@@ -63,8 +63,15 @@ extern double  to_seconds(uint64_t cycles);
+ inline static uint64_t rdtsc(void)
+ {
++#ifdef __aarch64__
++	uint64_t v;
++
++	__asm__ __volatile__("mrs %0, cntvct_el0" : "=r" (v));
++	return v;
++#else
+ 	uint32_t lo, hi;
+ 	__asm__ __volatile__("rdtsc" : "=a" (lo), "=d" (hi));
+ 	return (((uint64_t)hi << 32) | lo);
++#endif
+ }
+
+ /**

@@ -1,0 +1,96 @@
+# Hand-written lab: one SONiC switch, four Homa hosts on one VLAN.
+# Based on tgen output; tgen can't generate a single switch yet.
+
+x-host-common: &host-common
+  image: sonic-lab/homa-host:latest
+  platform: linux/arm64
+  privileged: true
+  tty: true
+  volumes:
+    - ./host_entry.sh:/host_entry.sh:ro
+    # Homa tools built in the VM by build-homa.sh
+    - /opt/HomaModule/util:/homa:ro
+  extra_hosts:
+    - "node0:10.70.2.1"
+    - "node1:10.70.2.2"
+    - "node2:10.70.2.3"
+    - "node3:10.70.2.4"
+
+services:
+  webmesh:
+    build:
+      context: ../../..
+      dockerfile: Dockerfile.webmesh
+    image: sonic-lab/webmesh:latest
+    platform: linux/arm64
+    privileged: true
+    pid: "host"
+    container_name: webmesh
+    ports:
+      - "8092:9090"
+    volumes:
+      - ./topology.yml:/etc/webmesh/topology.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9090/v1/status | grep -q '\"healthy\":true'"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  sw1-linux:
+    build:
+      context: ../../..
+      dockerfile: Dockerfile.debian
+    image: sonic-lab/debian:latest
+    platform: linux/arm64
+    privileged: true
+    tty: true
+    container_name: sw1-linux
+    volumes:
+      - ./init_linux.sh:/init_linux.sh:ro
+      - ./tmp/vnet_ready:/tmp/vnet_ready:rw
+    command: ["bash", "/init_linux.sh", "sw1-linux"]
+
+  sw1:
+    image: docker-sonic-vs:latest
+    platform: linux/arm64
+    privileged: true
+    tty: true
+    shm_size: "2gb"
+    security_opt:
+      - seccomp=unconfined
+    container_name: sonic-sw1
+    depends_on:
+      webmesh:
+        condition: service_healthy
+      sw1-linux:
+        condition: service_started
+    network_mode: "service:sw1-linux"
+    volumes:
+      - ./tmp/vnet_ready:/tmp/vnet_ready:ro
+      - /var/run/redis-vs/sw1:/var/run/redis
+      - ./sonic_entry.sh:/sonic_entry.sh:ro
+    entrypoint: ["/bin/bash", "/sonic_entry.sh", "sw1-linux"]
+
+  host1:
+    <<: *host-common
+    build:
+      context: .
+      dockerfile: Dockerfile.host
+    container_name: host1
+    command: ["bash", "/host_entry.sh", "10.70.2.1/24"]
+
+  host2:
+    <<: *host-common
+    container_name: host2
+    command: ["bash", "/host_entry.sh", "10.70.2.2/24"]
+
+  host3:
+    <<: *host-common
+    container_name: host3
+    command: ["bash", "/host_entry.sh", "10.70.2.3/24"]
+
+  host4:
+    <<: *host-common
+    container_name: host4
+    command: ["bash", "/host_entry.sh", "10.70.2.4/24"]

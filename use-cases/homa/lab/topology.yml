@@ -1,0 +1,23 @@
+topology:
+  name: homa-1x4
+  switches:
+    sw1:
+      role: leaf
+      ports:
+        Ethernet0: {}
+        Ethernet4: {}
+        Ethernet8: {}
+        Ethernet12: {}
+  links:
+    - endpoints:
+        - {device: sw1-linux, port: Ethernet0}
+        - {device: host1, port: eth1}
+    - endpoints:
+        - {device: sw1-linux, port: Ethernet4}
+        - {device: host2, port: eth1}
+    - endpoints:
+        - {device: sw1-linux, port: Ethernet8}
+        - {device: host3, port: eth1}
+    - endpoints:
+        - {device: sw1-linux, port: Ethernet12}
+        - {device: host4, port: eth1}
